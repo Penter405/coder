@@ -1,0 +1,77 @@
+import sys
+sys.dont_write_bytecode = True  # 禁止 __pycache__
+
+import os
+import tkinter as tk
+from tkinter import messagebox
+from projectIO import load_data, save_data
+
+# -------------------------
+# 資料讀取
+# -------------------------
+def load_project():
+    data = load_data()
+    current = data.get("current_project")
+    if not current:
+        messagebox.showerror("Error", "No project selected.")
+        return None, None, None
+    proj = data["projects"].get(current)
+    if not proj:
+        messagebox.showerror("Error", "Project info not found.")
+        return None, None, None
+    return current, proj, data
+
+# -------------------------
+# GUI
+# -------------------------
+class MainGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Project Control Panel")
+
+        self.project_name, self.proj_info, self.data = load_project()
+        if not self.project_name:
+            root.destroy()
+            return
+
+        tk.Label(root, text=f"Current Project: {self.project_name}", font=("Arial", 12, "bold")).pack(anchor="w")
+        tk.Label(root, text=f"Path: {self.proj_info['path']}").pack(anchor="w")
+
+        tk.Label(root, text="Files allowed for AI (selected_files):").pack(anchor="w", pady=(10, 0))
+
+        self.vars = {}
+        self.file_frame = tk.Frame(root)
+        self.file_frame.pack(anchor="w")
+
+        self.load_files()
+
+        tk.Button(root, text="Save selected_files", command=self.save).pack(pady=10)
+
+    def load_files(self):
+        project_path = self.proj_info["path"]
+        allowed = set(self.proj_info.get("selected_files", []))
+
+        for f in os.listdir(project_path):
+            full = os.path.join(project_path, f)
+            if os.path.isfile(full):
+                var = tk.BooleanVar(value=f in allowed)
+                cb = tk.Checkbutton(self.file_frame, text=f, variable=var)
+                cb.pack(anchor="w")
+                self.vars[f] = var
+
+    def save(self):
+        selected = [f for f, v in self.vars.items() if v.get()]
+        self.data["projects"][self.project_name]["selected_files"] = selected
+        save_data(self.data)
+        messagebox.showinfo("Saved", "selected_files updated.\nAI can now access only these files.")
+
+# -------------------------
+# Entry
+# -------------------------
+def main():
+    root = tk.Tk()
+    MainGUI(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

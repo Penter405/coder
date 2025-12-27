@@ -1,0 +1,21 @@
+# 忽略整個 file 資料夾
+file/
+
+# 忽略 Python 編譯檔
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略虛擬環境資料夾
+venv/
+.env/
+.env.*
+
+# 忽略 IDE 配置檔
+.vscode/
+.idea/
+
+# 忽略系統檔案
+.DS_Store
+Thumbs.db
