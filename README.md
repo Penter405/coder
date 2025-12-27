@@ -1,5 +1,5 @@
 # Coder 
-本專案將幫助你提升與LLM語言模型中，全端開發的效率
+本專案將提升你與LLM語言模型中，全端開發的效率
 ## 使用指南
 初始化檔案---[init.py](https://github.com/Penter405/coder/blob/main/init.py)
 ```
