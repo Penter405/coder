@@ -1,0 +1,146 @@
+{
+  "name": "ai-coder-helper",
+  "displayName": "AI Coder Helper",
+  "description": "Help prepare code for AI coding assistants - select files, generate chat, apply changes",
+  "version": "0.1.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiCoder.generateChat",
+        "title": "AI Coder: Generate Chat",
+        "icon": "$(export)"
+      },
+      {
+        "command": "aiCoder.applyChanges",
+        "title": "AI Coder: Apply Changes",
+        "icon": "$(check)"
+      },
+      {
+        "command": "aiCoder.refreshFiles",
+        "title": "AI Coder: Refresh File List",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiCoder.selectAll",
+        "title": "AI Coder: Select All Files",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "aiCoder.deselectAll",
+        "title": "AI Coder: Deselect All Files",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "aiCoder.diffShadow",
+        "title": "Review Changes (Diff)",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "aiCoder.mergeShadow",
+        "title": "Accept & Merge",
+        "icon": "$(check)"
+      },
+      {
+        "command": "aiCoder.discardShadow",
+        "title": "Discard",
+        "icon": "$(trash)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiCoder",
+          "title": "AI Coder",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiCoder": [
+        {
+          "id": "aiCoderFiles",
+          "name": "Selected Files",
+          "type": "tree"
+        },
+        {
+          "id": "aiCoderShadow",
+          "name": "Shadow Layer (Review)",
+          "type": "tree",
+          "icon": "$(git-pull-request)"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "aiCoder.generateChat",
+          "when": "view == aiCoderFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiCoder.refreshFiles",
+          "when": "view == aiCoderFiles",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aiCoder.diffShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "inline"
+        },
+        {
+          "command": "aiCoder.mergeShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "inline"
+        },
+        {
+          "command": "aiCoder.discardShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Coder Helper",
+      "properties": {
+        "aiCoder.outputFile": {
+          "type": "string",
+          "default": "chat.txt",
+          "description": "Output file name for generated chat"
+        },
+        "aiCoder.excludePatterns": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            ".git",
+            "__pycache__",
+            "*.pyc",
+            ".vscode"
+          ],
+          "description": "Patterns to exclude from file tree"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x",
+    "typescript": "^5.1.0"
+  }
+}

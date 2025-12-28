@@ -2,9 +2,10 @@ import sys
 import os
 import shutil
 import json
+import datetime
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QTreeWidget, QTreeWidgetItem, QPushButton,
-    QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog, QTextEdit
+    QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit, QInputDialog, QCheckBox
 )
 from PyQt6.QtCore import Qt
 
@@ -135,7 +136,7 @@ class ControlFilesWindow(QWidget):
         self.close()
 
 # ------------------------
-# Enter Window (IDE-like)
+# Enter Window
 # ------------------------
 class EnterWindow(QWidget):
     def __init__(self, project_name, project_path, data):
@@ -143,120 +144,210 @@ class EnterWindow(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.data = data
-        self.current_file = None
 
-        self.setWindowTitle(f"{project_name} Workspace")
-        self.resize(800, 600)
+        self.setWindowTitle(f"Enter Workspace - {project_name}")
+        self.resize(700, 600)
         self.init_ui()
-        self.build_tree()
 
     def init_ui(self):
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
 
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Files")
-        self.tree.itemClicked.connect(self.load_file)
-        layout.addWidget(self.tree, 1)
+        # Info
+        info_label = QLabel(f"Project: {self.project_name}\nPath: {self.project_path}")
+        layout.addWidget(info_label)
 
-        right_layout = QVBoxLayout()
-        self.editor = QTextEdit()
-        right_layout.addWidget(self.editor)
-
+        # Buttons
         btn_layout = QHBoxLayout()
-        self.btn_save = QPushButton("Save")
-        self.btn_add = QPushButton("Add")
-        self.btn_delete = QPushButton("Delete")
-        self.btn_close = QPushButton("Close")
-        btn_layout.addWidget(self.btn_save)
-        btn_layout.addWidget(self.btn_add)
-        btn_layout.addWidget(self.btn_delete)
-        btn_layout.addWidget(self.btn_close)
-        right_layout.addLayout(btn_layout)
+        self.btn_generate = QPushButton("Generate chat.txt")
+        self.btn_generate.clicked.connect(self.generate_chat)
+        self.btn_copy = QPushButton("Copy chat.txt to Clipboard")
+        self.btn_copy.clicked.connect(self.copy_chat)
+        self.btn_copy.setEnabled(False)
+        btn_layout.addWidget(self.btn_generate)
+        btn_layout.addWidget(self.btn_copy)
+        layout.addLayout(btn_layout)
 
-        layout.addLayout(right_layout, 3)
+        # VS Code
+        self.btn_code_ext = QPushButton("Open VS Code (AI Extension)")
+        self.btn_code_ext.setToolTip("Open VS Code with local AI extension loaded")
+        self.btn_code_ext.clicked.connect(self.open_vscode_with_extension)
+        layout.addWidget(self.btn_code_ext)
+
+        # Shadow context
+        self.chk_shadow_context = QCheckBox("Use Shadow Layer as Context")
+        layout.addWidget(self.chk_shadow_context)
+
+        # Text input
+        layout.addWidget(QLabel("AI Command / Code Input:"))
+        self.text_input = QTextEdit()
+        self.text_input.setPlaceholderText("Enter AI commands or paste code...")
+        layout.addWidget(self.text_input)
+
+        # Save Different / Save Shadow buttons
+        btn_shadow_layout = QHBoxLayout()
+        self.btn_diff = QPushButton("Save Different to chat.txt")
+        self.btn_diff.clicked.connect(self.save_different_to_chat)
+        self.btn_shadow = QPushButton("Save Shadow to Origin")
+        self.btn_shadow.clicked.connect(self.save_shadow_to_origin)
+        btn_shadow_layout.addWidget(self.btn_diff)
+        btn_shadow_layout.addWidget(self.btn_shadow)
+        layout.addLayout(btn_shadow_layout)
+
+        # Log
+        self.log_output = QTextEdit()
+        self.log_output.setReadOnly(True)
+        self.log_output.setMaximumHeight(120)
+        layout.addWidget(QLabel("Operation Log:"))
+        layout.addWidget(self.log_output)
+
         self.setLayout(layout)
 
-        self.btn_save.clicked.connect(self.save_file)
-        self.btn_add.clicked.connect(self.add_file)
-        self.btn_delete.clicked.connect(self.delete_file)
-        self.btn_close.clicked.connect(self.close)
+    def log(self, message):
+        self.log_output.append(message)
 
-    def build_tree(self):
-        self.tree.clear()
-        self.add_items(self.tree, self.project_path)
-
-    def add_items(self, parent_widget, path):
-        name = os.path.basename(path) or path
-        item = QTreeWidgetItem([name])
-        item.setData(0, Qt.ItemDataRole.UserRole, path)
-        if os.path.isdir(path):
-            for f in sorted(os.listdir(path)):
-                self.add_items(item, os.path.join(path, f))
-        if isinstance(parent_widget, QTreeWidget):
-            parent_widget.addTopLevelItem(item)
-        else:
-            parent_widget.addChild(item)
-
-    def load_file(self, item, column):
-        path = item.data(0, Qt.ItemDataRole.UserRole)
-        if os.path.isfile(path):
-            self.current_file = path
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    self.editor.setPlainText(f.read())
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Cannot read file: {e}")
-
-    def save_file(self):
-        if not self.current_file:
-            QMessageBox.warning(self, "Warning", "No file selected")
-            return
+    # ------------------------
+    # Generate chat.txt
+    # ------------------------
+    def generate_chat(self):
         try:
-            with open(self.current_file, "w", encoding="utf-8") as f:
-                f.write(self.editor.toPlainText())
-            QMessageBox.information(self, "Saved", f"{self.current_file} saved")
+            chat_folder = os.path.join("file", self.project_name)
+            os.makedirs(chat_folder, exist_ok=True)
+            chat_path = os.path.join(chat_folder, "chat.txt")
+            if not os.path.exists(chat_path):
+                with open(chat_path, "w", encoding="utf-8") as f:
+                    f.write(f"# Chat log for project {self.project_name}\n")
+                self.log(f"chat.txt created at: {os.path.abspath(chat_path)}")
+            else:
+                self.log(f"chat.txt already exists at: {os.path.abspath(chat_path)}")
+            self.btn_copy.setEnabled(True)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save: {e}")
+            self.log(f"Error generating chat.txt: {e}")
 
-    def add_file(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Add New File", self.project_path)
-        if path:
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("")
-                self.build_tree()
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to add file: {e}")
-
-    def delete_file(self):
-        item = self.tree.currentItem()
-        if not item:
-            QMessageBox.warning(self, "Warning", "Please select a file or folder to delete.")
-            return
-        path = item.data(0, Qt.ItemDataRole.UserRole)
-        confirm = QMessageBox.question(
-            self,
-            "Confirm Delete",
-            f"Are you sure you want to delete:\n{path}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+    # ------------------------
+    # Copy chat.txt
+    # ------------------------
+    def copy_chat(self):
         try:
-            if os.path.isfile(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                shutil.rmtree(path)
-            # 移除不存在的 selected_files
-            sel_files = self.data["projects"][self.project_name].get("selected_files", [])
-            sel_files = [f for f in sel_files if os.path.exists(f)]
-            self.data["projects"][self.project_name]["selected_files"] = sel_files
-            save_data(self.data)
-            self.build_tree()
-            self.editor.clear()
+            chat_path = os.path.join("file", self.project_name, "chat.txt")
+            if os.path.exists(chat_path):
+                with open(chat_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                QApplication.clipboard().setText(content)
+                self.log("chat.txt copied to clipboard!")
+            else:
+                self.log("chat.txt not found!")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to delete: {e}")
+            self.log(f"Error copying chat.txt: {e}")
+
+    # ------------------------
+    # VS Code Extension
+    # ------------------------
+    def open_vscode_with_extension(self):
+        try:
+            import subprocess
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ext_path = os.path.join(base_dir, "ai-coder-helper")
+            if not os.path.exists(ext_path):
+                QMessageBox.warning(self, "Error", f"Extension not found at:\n{ext_path}")
+                return
+
+            # 1. Save AI commands
+            cmd_path = os.path.join("file", "ai_commands.txt")
+            os.makedirs("file", exist_ok=True)
+            with open(cmd_path, "w", encoding="utf-8") as f:
+                f.write(self.text_input.toPlainText())
+            self.log(f"AI commands saved to: {os.path.abspath(cmd_path)}")
+
+            # 2. Sync selected files to shadow
+            selected_files = self.data["projects"][self.project_name].get("selected_files", [])
+            shadow_root = os.path.join("file", "shadow")
+            os.makedirs(shadow_root, exist_ok=True)
+            for file_path in selected_files:
+                if os.path.exists(file_path):
+                    rel = os.path.relpath(file_path, self.project_path)
+                    dest = os.path.join(shadow_root, rel)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.copy2(file_path, dest)
+            self.log(f"{len(selected_files)} files synced to shadow.")
+
+            # 3. Launch VS Code
+            code_cmd = shutil.which("code")
+            if not code_cmd:
+                QMessageBox.warning(self, "Error", "VS Code not found in PATH.")
+                return
+            subprocess.Popen([code_cmd, self.project_path, f"--extensionDevelopmentPath={ext_path}"])
+            self.log("VS Code launched with AI extension.")
+        except Exception as e:
+            self.log(f"Error launching VS Code: {e}")
+
+    # ------------------------
+    # Save Different to chat.txt
+    # ------------------------
+    def save_different_to_chat(self):
+        try:
+            shadow_root = os.path.join("file", "shadow")
+            chat_path = os.path.join("file", self.project_name, "chat.txt")
+            os.makedirs(os.path.dirname(chat_path), exist_ok=True)
+            if not os.path.exists(shadow_root):
+                self.log("Shadow layer not found.")
+                return
+
+            import difflib
+            diffs = []
+            for root, dirs, files in os.walk(shadow_root):
+                for file in files:
+                    shadow_file = os.path.join(root, file)
+                    rel = os.path.relpath(shadow_file, shadow_root)
+                    origin_file = os.path.join(self.project_path, rel)
+                    with open(shadow_file, 'r', encoding='utf-8') as f:
+                        shadow_lines = f.readlines()
+                    if os.path.exists(origin_file):
+                        with open(origin_file, 'r', encoding='utf-8') as f:
+                            origin_lines = f.readlines()
+                    else:
+                        origin_lines = []
+
+                    matcher = difflib.SequenceMatcher(None, origin_lines, shadow_lines)
+                    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                        if tag == "equal":
+                            continue
+                        elif tag == "replace":
+                            diffs.append(f"{rel} replace@{i1+1}-{i2}{{\n{''.join(shadow_lines[j1:j2])}}}")
+                        elif tag == "delete":
+                            diffs.append(f"{rel} del@{i1+1}-{i2}")
+                        elif tag == "insert":
+                            diffs.append(f"{rel} add@{i1}{{\n{''.join(shadow_lines[j1:j2])}}}")
+
+            if diffs:
+                with open(chat_path, "a", encoding="utf-8") as f:
+                    f.write("\n\n# Diff Report\n")
+                    f.write("\n".join(diffs))
+                self.log(f"Diff saved to: {os.path.abspath(chat_path)} ({len(diffs)} changes)")
+                QMessageBox.information(self, "Success", f"Diff saved to chat.txt ({len(diffs)} changes).")
+            else:
+                self.log("No differences found.")
+        except Exception as e:
+            self.log(f"Error saving diff: {e}")
+
+    # ------------------------
+    # Save Shadow to Origin
+    # ------------------------
+    def save_shadow_to_origin(self):
+        try:
+            shadow_root = os.path.join("file", "shadow")
+            count = 0
+            for root, dirs, files in os.walk(shadow_root):
+                for file in files:
+                    shadow_file = os.path.join(root, file)
+                    rel = os.path.relpath(shadow_file, shadow_root)
+                    dest = os.path.join(self.project_path, rel)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.copy2(shadow_file, dest)
+                    count += 1
+            self.log(f"{count} files synced from shadow to project.")
+            QMessageBox.information(self, "Success", f"Synced {count} files to project.")
+        except Exception as e:
+            self.log(f"Error syncing shadow to origin: {e}")
 
 # ------------------------
 # Main Window
@@ -266,7 +357,6 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Project Manager")
         self.resize(500, 220)
-
         self.data = load_data()
         self.current_project = self.data.get("current_project")
         self.init_ui()

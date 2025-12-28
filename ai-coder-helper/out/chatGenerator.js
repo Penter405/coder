@@ -1,0 +1,134 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ChatGenerator = void 0;
+const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
+class ChatGenerator {
+    /**
+     * Generate chat.txt content with task description, project tree, and selected files
+     */
+    async generate(selectedFiles, taskDescription) {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+        let content = '';
+        // Section 1: Task Description
+        content += '# Task Description\n\n';
+        content += taskDescription + '\n\n';
+        // Section 2: Project Structure
+        content += '# Project Structure\n\n';
+        content += '```\n';
+        content += this.generateProjectTree(workspaceRoot, selectedFiles);
+        content += '```\n\n';
+        // Section 3: Selected Files Content
+        content += '# Selected Files\n\n';
+        for (const filePath of selectedFiles) {
+            const relativePath = path.relative(workspaceRoot, filePath);
+            const ext = path.extname(filePath).slice(1) || 'txt';
+            content += `## ${relativePath}\n\n`;
+            content += '```' + ext + '\n';
+            try {
+                const fileContent = fs.readFileSync(filePath, 'utf8');
+                content += fileContent;
+                if (!fileContent.endsWith('\n')) {
+                    content += '\n';
+                }
+            }
+            catch (error) {
+                content += `// Error reading file: ${error}\n`;
+            }
+            content += '```\n\n';
+        }
+        return content;
+    }
+    /**
+     * Generate a tree view of the project structure
+     */
+    generateProjectTree(rootPath, selectedFiles) {
+        const config = vscode.workspace.getConfiguration('aiCoder');
+        const excludePatterns = config.get('excludePatterns', []);
+        const selectedSet = new Set(selectedFiles);
+        const rootName = path.basename(rootPath);
+        let tree = rootName + '/\n';
+        tree += this.buildTree(rootPath, '', excludePatterns, selectedSet);
+        return tree;
+    }
+    buildTree(dirPath, prefix, excludePatterns, selectedFiles) {
+        let result = '';
+        try {
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            // Filter and sort entries
+            const filteredEntries = entries.filter(entry => {
+                return !excludePatterns.some(pattern => {
+                    if (pattern.startsWith('*')) {
+                        return entry.name.endsWith(pattern.slice(1));
+                    }
+                    return entry.name === pattern;
+                });
+            });
+            // Sort: directories first, then files
+            filteredEntries.sort((a, b) => {
+                if (a.isDirectory() && !b.isDirectory())
+                    return -1;
+                if (!a.isDirectory() && b.isDirectory())
+                    return 1;
+                return a.name.localeCompare(b.name);
+            });
+            for (let i = 0; i < filteredEntries.length; i++) {
+                const entry = filteredEntries[i];
+                const isLast = i === filteredEntries.length - 1;
+                const fullPath = path.join(dirPath, entry.name);
+                const connector = isLast ? '└── ' : '├── ';
+                const childPrefix = isLast ? '    ' : '│   ';
+                // Mark selected files with [*]
+                const isSelected = selectedFiles.has(fullPath);
+                const marker = isSelected ? ' [*]' : '';
+                if (entry.isDirectory()) {
+                    result += prefix + connector + entry.name + '/\n';
+                    result += this.buildTree(fullPath, prefix + childPrefix, excludePatterns, selectedFiles);
+                }
+                else {
+                    result += prefix + connector + entry.name + marker + '\n';
+                }
+            }
+        }
+        catch (error) {
+            // Ignore permission errors
+        }
+        return result;
+    }
+}
+exports.ChatGenerator = ChatGenerator;
+//# sourceMappingURL=chatGenerator.js.map

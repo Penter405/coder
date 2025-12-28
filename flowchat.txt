@@ -1,0 +1,3 @@
+if option2>> code open vs code with our Extension,edit the copy Files. and the vs code extension or main.py. cheak the difference && user reply and save to log.txt && chat.txt
+user copy chat.txt to online ai. ai reply. user copy to chat.txt
+user let code know the ai reply. open vs code with our Extension,edit the copy Files. ...
