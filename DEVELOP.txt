@@ -53,31 +53,33 @@ main.py
     ├─ [ Option 2 ] Enter
     │   │
     │   └─ Enter Workspace
-    │       │
-    │       ├─ Read selected_files
-    │       │
-    │       ├─ Check permission
-    │       │   ├─ selected_files is EMPTY
-    │       │   │   └─ Warn:
-    │       │   │       "AI has no permission to operate files."
-    │       │   │
-    │       │   └─ selected_files NOT EMPTY
-    │       │       └─ Continue
-    │       │
-    │       ├─ Generate chat.txt
-    │       │   ├─ task_description
-    │       │   ├─ project file tree
-    │       │   └─ contents of selected_files ONLY
-    │       │
-    │       ├─ User action
-    │       │   ├─ Copy chat.txt
-    │       │   └─ Paste into LLM
-    │       │
-    │       ├─ LLM outputs code / patch
-    │       │
-    │       └─ User paste back result
-    │           ├─ Apply changes to project
-    │           └─ Write operation record to log.txt
+    │       └─loop.user can enter the loop in any step,can quit in and step.
+    │           │
+    │           ├─ Read selected_files
+    │           │
+    │           ├─ Check permission
+    │           │   ├─ selected_files is EMPTY
+    │           │   │   └─ Warn:
+    │           │   │       "AI has no permission to operate files."
+    │           │   │
+    │           │   └─ selected_files NOT EMPTY
+    │           │       └─ Continue
+    │           │
+    │           ├─ Generate chat.txt
+    │           │   ├─ task_description
+    │           │   ├─ project file tree
+    │           │   └─ contents of selected_files ONLY
+    │           │
+    │           ├─ User action
+    │           │   ├─ Copy chat.txt
+    │           │   └─ Paste into LLM
+    │           │
+    │           ├─ LLM outputs code / patch
+    │           │
+    │           └─ User paste back result
+    |               ├─user open a new copy project. or use coped project.
+    │               ├─ Apply changes to project(go to vscode with our extention. user do aspect and reject as antigravity)
+    │               └─ Write operation record to log.txt(extension save different or our code cheak different from origin project to coped project).the second thing can be do is save coped project to origin project.
     │
     └─ [ Option 3 ] Exit
         └─ Program End
