@@ -5,7 +5,8 @@ import json
 import datetime
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QTreeWidget, QTreeWidgetItem, QPushButton,
-    QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit, QInputDialog, QCheckBox
+    QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit, QInputDialog, QCheckBox,
+    QFileDialog, QTreeWidgetItemIterator
 )
 from PyQt6.QtCore import Qt
 
@@ -136,6 +137,178 @@ class ControlFilesWindow(QWidget):
         self.close()
 
 # ------------------------
+# Shadow Manager Window (Pre-Launch)
+# ------------------------
+class ShadowManagerWindow(QWidget):
+    def __init__(self, project_path, parent_window):
+        super().__init__()
+        self.project_path = project_path
+        self.parent_window = parent_window
+        self.shadow_root = os.path.join("file", "shadow")
+        self.setWindowTitle("Shadow Layer Manager")
+        self.resize(700, 500)
+        self.init_ui()
+        self.build_tree()
+
+    def init_ui(self):
+        layout = QHBoxLayout()
+        
+        # Left: Tree
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("Shadow Layer Files")
+        layout.addWidget(self.tree)
+        
+        # Right: Buttons
+        btn_layout = QVBoxLayout()
+        self.btn_enter = QPushButton("Enter (Launch VS Code)")
+        self.btn_add = QPushButton("Add (Copy from Origin)")
+        self.btn_delete = QPushButton("Delete (Remove form Shadow)")
+        
+        btn_layout.addWidget(self.btn_enter)
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_delete)
+        btn_layout.addStretch()
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        
+        self.btn_enter.clicked.connect(self.launch_vscode)
+        self.btn_add.clicked.connect(self.add_files)
+        self.btn_delete.clicked.connect(self.delete_files)
+
+    def build_tree(self):
+        self.tree.clear()
+        if os.path.exists(self.shadow_root):
+            self.add_items(self.tree, self.shadow_root)
+
+    def add_items(self, parent_widget, path):
+        name = os.path.basename(path)
+        item = QTreeWidgetItem([name])
+        item.setData(0, Qt.ItemDataRole.UserRole, path)
+        
+        if isinstance(parent_widget, QTreeWidget):
+            parent_widget.addTopLevelItem(item)
+        else:
+            parent_widget.addChild(item)
+
+        if os.path.isdir(path):
+            files = sorted(os.listdir(path))
+            for f in files:
+                self.add_items(item, os.path.join(path, f))
+
+    def launch_vscode(self):
+        self.close()
+        self.parent_window.real_launch_vscode()
+
+    def add_files(self):
+        # Open file dialog at project root
+        fname, _ = QFileDialog.getOpenFileName(self, "Select file to add to Shadow", self.project_path)
+        if fname:
+            try:
+                rel = os.path.relpath(fname, self.project_path)
+                if rel.startswith(".."):
+                    QMessageBox.warning(self, "Error", "File must be inside project.")
+                    return
+                
+                dest = os.path.join(self.shadow_root, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(fname, dest)
+                self.build_tree()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def delete_files(self):
+        item = self.tree.currentItem()
+        if not item: return
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+            self.build_tree()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+
+# ------------------------
+# Sync Window (Save Shadow to Origin)
+# ------------------------
+class SyncWindow(QWidget):
+    def __init__(self, project_path, parent_window):
+        super().__init__()
+        self.project_path = project_path
+        self.parent_window = parent_window
+        self.shadow_root = os.path.join("file", "shadow")
+        self.setWindowTitle("Sync Shadow to Origin")
+        self.resize(700, 500)
+        self.init_ui()
+        self.build_tree()
+
+    def init_ui(self):
+        layout = QHBoxLayout()
+        
+        # Left: Tree
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("Select Files to Sync")
+        layout.addWidget(self.tree)
+        
+        # Right: Buttons
+        btn_layout = QVBoxLayout()
+        self.btn_choose = QPushButton("Choose (Sync Selected)")
+        
+        btn_layout.addWidget(self.btn_choose)
+        btn_layout.addStretch()
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        
+        self.btn_choose.clicked.connect(self.sync_files)
+
+    def build_tree(self):
+        self.tree.clear()
+        if os.path.exists(self.shadow_root):
+            self.add_items(self.tree, self.shadow_root)
+
+    def add_items(self, parent_widget, path):
+        name = os.path.basename(path)
+        item = QTreeWidgetItem([name])
+        item.setData(0, Qt.ItemDataRole.UserRole, path)
+        item.setCheckState(0, Qt.CheckState.Unchecked) # Default unchecked for safety? Or checked? User didn't specify.
+        
+        if isinstance(parent_widget, QTreeWidget):
+            parent_widget.addTopLevelItem(item)
+        else:
+            parent_widget.addChild(item)
+
+        if os.path.isdir(path):
+            files = sorted(os.listdir(path))
+            for f in files:
+                self.add_items(item, os.path.join(path, f))
+    
+    def sync_files(self):
+        count = 0
+        try:
+            # Iterate tree to find checked items
+            iterator = QTreeWidgetItemIterator(self.tree)
+            while iterator.value():
+                item = iterator.value()
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    shadow_path = item.data(0, Qt.ItemDataRole.UserRole)
+                    if os.path.isfile(shadow_path):
+                        rel = os.path.relpath(shadow_path, self.shadow_root)
+                        dest = os.path.join(self.project_path, rel)
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.copy2(shadow_path, dest)
+                        count += 1
+                iterator += 1
+            
+            QMessageBox.information(self, "Success", f"Synced {count} files to origin.")
+            self.close()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+# ------------------------
 # Enter Window
 # ------------------------
 class EnterWindow(QWidget):
@@ -242,23 +415,20 @@ class EnterWindow(QWidget):
     # ------------------------
     # VS Code Extension
     # ------------------------
+    # ------------------------
+    # VS Code Extension
+    # ------------------------
     def open_vscode_with_extension(self):
+        # 1. Save AI commands
         try:
-            import subprocess
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            ext_path = os.path.join(base_dir, "ai-coder-helper")
-            if not os.path.exists(ext_path):
-                QMessageBox.warning(self, "Error", f"Extension not found at:\n{ext_path}")
-                return
-
-            # 1. Save AI commands
             cmd_path = os.path.join("file", "ai_commands.txt")
             os.makedirs("file", exist_ok=True)
             with open(cmd_path, "w", encoding="utf-8") as f:
                 f.write(self.text_input.toPlainText())
-            self.log(f"AI commands saved to: {os.path.abspath(cmd_path)}")
+        except: pass
 
-            # 2. Sync selected files to shadow
+        # 2. Sync selected files to shadow (Initialize if needed)
+        try:
             selected_files = self.data["projects"][self.project_name].get("selected_files", [])
             shadow_root = os.path.join("file", "shadow")
             os.makedirs(shadow_root, exist_ok=True)
@@ -266,15 +436,40 @@ class EnterWindow(QWidget):
                 if os.path.exists(file_path):
                     rel = os.path.relpath(file_path, self.project_path)
                     dest = os.path.join(shadow_root, rel)
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    shutil.copy2(file_path, dest)
-            self.log(f"{len(selected_files)} files synced to shadow.")
+                    # Only copy if not exists to act as init
+                    if not os.path.exists(dest):
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.copy2(file_path, dest)
+        except: pass
 
-            # 3. Launch VS Code
+        # 3. Open Shadow Manager Window instead of direct launch
+        self.shadow_manager = ShadowManagerWindow(self.project_path, self)
+        self.shadow_manager.show()
+
+    def real_launch_vscode(self):
+        try:
+            import subprocess
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ext_path = os.path.join(base_dir, "ai-coder-helper")
+            
             code_cmd = shutil.which("code")
+            if not code_cmd:
+                # Fallback check
+                common_paths = [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles%\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft VS Code\bin\code.cmd"),
+                ]
+                for p in common_paths:
+                    if os.path.exists(p):
+                        code_cmd = p
+                        break
+
             if not code_cmd:
                 QMessageBox.warning(self, "Error", "VS Code not found in PATH.")
                 return
+            
+            # Launch
             subprocess.Popen([code_cmd, self.project_path, f"--extensionDevelopmentPath={ext_path}"])
             self.log("VS Code launched with AI extension.")
         except Exception as e:
@@ -332,22 +527,13 @@ class EnterWindow(QWidget):
     # ------------------------
     # Save Shadow to Origin
     # ------------------------
+    # ------------------------
+    # Save Shadow to Origin
+    # ------------------------
     def save_shadow_to_origin(self):
-        try:
-            shadow_root = os.path.join("file", "shadow")
-            count = 0
-            for root, dirs, files in os.walk(shadow_root):
-                for file in files:
-                    shadow_file = os.path.join(root, file)
-                    rel = os.path.relpath(shadow_file, shadow_root)
-                    dest = os.path.join(self.project_path, rel)
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    shutil.copy2(shadow_file, dest)
-                    count += 1
-            self.log(f"{count} files synced from shadow to project.")
-            QMessageBox.information(self, "Success", f"Synced {count} files to project.")
-        except Exception as e:
-            self.log(f"Error syncing shadow to origin: {e}")
+        # Open Sync Window instead of direct sync
+        self.sync_window = SyncWindow(self.project_path, self)
+        self.sync_window.show()
 
 # ------------------------
 # Main Window
