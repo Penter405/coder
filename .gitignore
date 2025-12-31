@@ -19,3 +19,5 @@ venv/
 # 忽略系統檔案
 .DS_Store
 Thumbs.db
+#忽略error檔案
+red.txt

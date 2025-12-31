@@ -60,3 +60,33 @@ python main.py
 1. 在 Extension 側邊欄勾選您要修改的檔案。
 2. 執行 `python main.py` -> **Option 2** -> **Generate chat.txt**。
 3. `main.py` 會自動載入您在 VS Code 中選擇的那些檔案。
+
+---
+
+## 介面按鈕功能說明
+
+### 主視窗 (Main Window)
+- **Control Selected Files**: 開啟檔案選取視窗，勾選要加入 AI Context 的專案檔案。
+- **Enter**: 進入所選專案的工作區 (Workspace)，進行更多 AI 協作操作。
+- **Exit**: 關閉程式。
+
+### 檔案選取視窗 (Control Selected Files)
+- **Apply**: 儲存目前的檔案勾選狀態至 `data.json`。
+- **Cancel**: 取消變更並關閉視窗。
+
+### 專案工作區 (Enter Window)
+- **Generate chat.txt**: 根據選取的檔案生成 `chat.txt`，供 AI 閱讀。
+- **Copy chat.txt to Clipboard**: 將 `chat.txt` 的內容複製到剪貼簿。
+- **Open VS Code (AI Extension)**: 開啟 VS Code 並載入專用的 AI 輔助套件 (包含 Shadow Layer 功能)。
+- **Save Different to chat.txt**: 比對 Shadow Layer (AI 修改版) 與原始檔案的差異，將 Diff 寫入 `chat.txt`。
+- **Save Shadow to Origin**: 開啟同步視窗，將 Shadow Layer 的修改寫回原始專案。
+
+### Shadow Layer 管理器 (Shadow Manager)
+*(當使用 "Open VS Code" 時出現)*
+- **Enter (Launch VS Code)**: 正式啟動 VS Code。
+- **Add (Copy from Origin)**: 從原始專案複製檔案到 Shadow Layer (建立副本以供修改)。
+- **Delete (Remove from Shadow)**: 刪除 Shadow Layer 中的檔案 (不影響原始檔案)。
+
+### 同步視窗 (Sync Window)
+*(點擊 "Save Shadow to Origin" 後出現)*
+- **Choose (Sync Selected)**: 將勾選的 Shadow Layer 檔案覆蓋回原始專案檔案 (套用變更)。
