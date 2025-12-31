@@ -42,6 +42,7 @@ class button():
 #system variable define
 input_box=[]
 output_box=[]
+toggle_switch=[]
 project_name="the project to process was set in data.json by projectIO.py"
 project_path="the project path to process was set in data.json by projectIO.py"
 #system function define
@@ -69,6 +70,15 @@ exit_button=button("exit")
 input_box.append("可以勾選的選單，資料夾可以展開")
 apply_button=button("apply")#apply the change in input_box[0]
 cancel_button=button("cancel")#cancel action
+#in enter_window
+source_button=button("source")
+coped_button=button("coped")
+toggle_switch.append("selected file of source")
+toggle_switch.append("selected file of shadow")
+toggle_switch.append("different from source to coped")
+input_box.append("可以輸入的框")
+Open_vs_code_button=button("Open IDE of source")
+geenerate_chat_txt_button=button("generate chat.txt")
 
 
 #main code
@@ -103,4 +113,4 @@ if isuseable(control_file_window):
 #enter_window
 if isuseable(enter_window):
     ##ui
-    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[]]
+    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[source_button,coped_button],[rs for rs in toggle_switch[0:3]],input_box[1]]
