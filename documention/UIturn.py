@@ -3,6 +3,7 @@ input_box 輸入框
 output_box 輸出框
 button 按鈕
 window 窗口
+thing to do:gernerate prompt to ai(with choosing file to ai). get return from ai. vs code get ai return. user aspect or reject.
 """
 
 
@@ -56,9 +57,10 @@ def isuseable(a):
 main_window=window("coder",[500,220])
 control_file_window=window("control selected files",[600,500])
 enter_window=window(f"workspace of project {project_name}",[700,600])
-coped_project_choose_window=window("choose coped project to enter",[700,500])
-save_from_coped_to_origin_project_window=window("save from coped to origin project",[700,500])
-
+coped_project_choose_window=window("choose coped project to enter",[700,500])#may not be used
+save_from_coped_to_origin_project_window=window("save from coped to origin project",[700,500])#may not be used
+project_choose_window=window("choose project to process",[700,500])
+vs_code="VS Code with our extension, not python window"
 #initialize
 
 #in main_window
@@ -67,7 +69,7 @@ enter_button=button("enter")
 exit_button=button("exit")
 
 #in control_file_window
-input_box.append("可以勾選的選單，資料夾可以展開")
+input_box.append("可以勾選的選單，資料夾可以展開")#index 0
 apply_button=button("apply")#apply the change in input_box[0]
 cancel_button=button("cancel")#cancel action
 #in enter_window
@@ -76,9 +78,15 @@ coped_button=button("coped")
 toggle_switch.append("selected file of source")
 toggle_switch.append("selected file of shadow")
 toggle_switch.append("different from source to coped")
-input_box.append("可以輸入的框")
+input_box.append("可以輸入的框")#index 1
 Open_vs_code_button=button("Open IDE of source")
-geenerate_chat_txt_button=button("generate chat.txt")
+generate_chat_txt_button=button("generate prompt")
+toggle_switch.append("vscode from source or coped")#index 4
+output_box.append("Log 輸出")#index 0
+#in project_choose_window
+input_box.append("可以勾選的選單，資料夾可以展開, 用來選擇project,可以選origin project或是 coped project, 其中origin project會有特別標示")#index 2
+apply_button=button("apply")#apply the change in input_box[2]
+cancel_button=button("cancel")#cancel action
 
 
 #main code
@@ -113,4 +121,33 @@ if isuseable(control_file_window):
 #enter_window
 if isuseable(enter_window):
     ##ui
-    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[source_button,coped_button],[rs for rs in toggle_switch[0:3]],input_box[1]]
+    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[source_button,coped_button],[rs for rs in toggle_switch[0:3]],input_box[1],[generate_chat_txt_button,Open_vs_code_button,toggle_switch[3]],output_box[0]]
+    if click(source_button):
+        project_choose_window.open()#code will know what is source project
+    if click(coped_button):
+        project_choose_window.open()#code will know what is coped project
+    if click(toggle_switch):
+        print("save to data.json")
+    if click(generate_chat_txt_button):
+        print("generate chat.txt with all our setting in the enter_window")
+    if click(Open_vs_code_button):
+        project_choose_window.open()#code will know what project to open
+        print("open vs code ,must cheak toggle_switch[4]")
+
+if isuseable(project_choose_window):
+    """
+    new logic:one project we set in projectIO.py, can have many coped project. we call the not coped project as origin project. coped project save at the coder.a origin project cant invite projects of b origin project.
+    """
+    ##ui
+    from_top_see=[f"origin Project: {project_name}",f"Path: {project_path}",input_box[2]]
+    from_buttom_see=[[apply_button,cancel_button]]
+    ##logic
+    if click(apply_button):
+        print("save the change in input_box[2] to data.json")
+        project_choose_window.close()
+    if click(cancel_button):
+        print("cancel, not save any change")
+    if click(project_choose_window):
+        project_choose_window.close()
+if isuseable(vs_code):
+    print("the extension is in ai-code-helper of this coder project")#extension that we made could be not work well.

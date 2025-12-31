@@ -175,6 +175,16 @@ class ShadowManagerWindow(QWidget):
         self.btn_enter.clicked.connect(self.launch_vscode)
         self.btn_add.clicked.connect(self.add_files)
         self.btn_delete.clicked.connect(self.delete_files)
+        
+        # Add Sync Button (Moved from EnterWindow)
+        self.btn_sync = QPushButton("Sync Shadow to Origin")
+        self.btn_sync.setToolTip("Open Sync Window to copy files back to project")
+        self.btn_sync.clicked.connect(self.open_sync_window)
+        btn_layout.addWidget(self.btn_sync)
+
+    def open_sync_window(self):
+        self.sync_win = SyncWindow(self.project_path, self.parent_window)
+        self.sync_win.show()
 
     def build_tree(self):
         self.tree.clear()
@@ -309,6 +319,132 @@ class SyncWindow(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
 # ------------------------
+# Project Choose Window
+# ------------------------
+from PyQt6.QtCore import pyqtSignal
+
+class ProjectChooseWindow(QWidget):
+    selection_made = pyqtSignal()
+
+    def __init__(self, project_name, project_path, data):
+        super().__init__()
+        self.project_name = project_name
+        self.project_path = project_path
+        self.data = data
+        self.setWindowTitle("Choose Project to Process")
+        self.resize(700, 500)
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+        # Head
+        layout.addWidget(QLabel(f"Origin Project: {self.project_name}\nPath: {self.project_path}"))
+
+        # Tree
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("Projects / Contexts")
+        layout.addWidget(self.tree)
+
+        # Debug Log (Initialize EARLY)
+        self.log_widget = QTextEdit()
+        self.log_widget.setPlaceholderText("Debug Log...")
+        self.log_widget.setMaximumHeight(100)
+        
+        # Roots
+        self.origin_item = QTreeWidgetItem([f"[Origin] {self.project_name}"])
+        self.origin_item.setData(0, Qt.ItemDataRole.UserRole, self.project_path)
+        self.origin_item.setCheckState(0, Qt.CheckState.Checked)
+        self.tree.addTopLevelItem(self.origin_item)
+
+        self.coped_root = QTreeWidgetItem(["Coped Projects"])
+        self.tree.addTopLevelItem(self.coped_root)
+
+        # Shadow
+        shadow_path = os.path.join("file", "shadow")
+        self.shadow_item = QTreeWidgetItem(["Shadow Layer"])
+        self.shadow_item.setData(0, Qt.ItemDataRole.UserRole, shadow_path)
+        self.shadow_item.setCheckState(0, Qt.CheckState.Checked)
+        self.coped_root.addChild(self.shadow_item)
+        
+        self.coped_root.setExpanded(True)
+        self.origin_item.setExpanded(True)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.btn_apply = QPushButton("Apply")
+        self.btn_cancel = QPushButton("Cancel")
+        btn_layout.addWidget(self.btn_apply)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+        self.btn_apply.clicked.connect(self.apply_changes)
+        self.btn_cancel.clicked.connect(self.close)
+
+        # Add Log Widget to Layout
+        layout.addWidget(self.log_widget)
+        self.setLayout(layout)  # <--- CRITICAL FIX: Apply the layout to the window
+        
+        self.log(f"Initialized ProjectChooseWindow for: {self.project_path}")
+
+        # Populate NOW (after log widget exists)
+        if os.path.exists(self.project_path):
+            self.populate_tree(self.origin_item, self.project_path)
+        
+        if os.path.exists(shadow_path):
+            self.populate_tree(self.shadow_item, shadow_path)
+
+    def log(self, msg):
+        self.log_widget.append(msg)
+        print(f"[ProjectChooseWindow] {msg}")
+
+    def populate_tree(self, parent_item, root_path):
+        try:
+            self.log(f"Populating path: {root_path}")
+            if not os.path.exists(root_path):
+                self.log(f"Path does not exist: {root_path}")
+                return
+
+            if os.path.isdir(root_path):
+                files = sorted(os.listdir(root_path))
+                self.log(f"Found {len(files)} files in {root_path}")
+                for f in files:
+                    full_path = os.path.join(root_path, f)
+                    if f in [".git", "__pycache__", "file"]: 
+                        continue # Skip generic ignores
+                    
+                    item = QTreeWidgetItem([f])
+                    item.setData(0, Qt.ItemDataRole.UserRole, full_path)
+                    item.setCheckState(0, Qt.CheckState.Unchecked)
+                    
+                    parent_item.addChild(item)
+                    if os.path.isdir(full_path):
+                        self.populate_tree(item, full_path)
+            else:
+                self.log(f"Not a directory: {root_path}")
+        except Exception as e:
+            self.log(f"Error populating tree: {e}")
+
+    def apply_changes(self):
+        try:
+            active = []
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    path = item.data(0, Qt.ItemDataRole.UserRole)
+                    if path: active.append(path)
+                it += 1
+            
+            # Save to data (assuming 'active_contexts' list)
+            self.data["projects"][self.project_name]["active_contexts"] = active
+            save_data(self.data)
+            # QMessageBox.information(self, "Saved", "Project selection saved.") # Optional: Reduce popup spam
+            self.selection_made.emit()
+            self.close()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+# ------------------------
 # Enter Window
 # ------------------------
 class EnterWindow(QWidget):
@@ -325,46 +461,74 @@ class EnterWindow(QWidget):
     def init_ui(self):
         layout = QVBoxLayout()
 
-        # Info
+        # 1. Info (Top)
+        # main_window.from_top_see=[f"Project: {project_name}",f"Path: {project_path}"...]
         info_label = QLabel(f"Project: {self.project_name}\nPath: {self.project_path}")
         layout.addWidget(info_label)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.btn_generate = QPushButton("Generate chat.txt")
-        self.btn_generate.clicked.connect(self.generate_chat)
-        self.btn_copy = QPushButton("Copy chat.txt to Clipboard")
-        self.btn_copy.clicked.connect(self.copy_chat)
-        self.btn_copy.setEnabled(False)
-        btn_layout.addWidget(self.btn_generate)
-        btn_layout.addWidget(self.btn_copy)
-        layout.addLayout(btn_layout)
+        # 2. Source / Coped Buttons (Row 1)
+        # [source_button, coped_button]
+        row1 = QHBoxLayout()
+        self.btn_source = QPushButton("Source")
+        self.btn_source.setToolTip("Select Source Files (ControlFilesWindow)")
+        self.btn_source.clicked.connect(self.open_source_manager)
+        
+        self.btn_coped = QPushButton("Coped")
+        self.btn_coped.setToolTip("Select Shadow Files (ShadowManagerWindow)")
+        self.btn_coped.clicked.connect(self.open_shadow_manager_direct)
+        
+        row1.addWidget(self.btn_source)
+        row1.addWidget(self.btn_coped)
+        layout.addLayout(row1)
 
-        # VS Code
-        self.btn_code_ext = QPushButton("Open VS Code (AI Extension)")
-        self.btn_code_ext.setToolTip("Open VS Code with local AI extension loaded")
-        self.btn_code_ext.clicked.connect(self.open_vscode_with_extension)
-        layout.addWidget(self.btn_code_ext)
+        # 3. Toggles (Row 2)
+        # [selected file of source, selected file of shadow, different from source to coped]
+        row2 = QHBoxLayout()
+        self.btn_toggle_src = QPushButton("Source Files")
+        self.btn_toggle_src.setCheckable(True)
+        self.btn_toggle_src.setChecked(True)
+        self.btn_toggle_src.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
+        
+        self.btn_toggle_shadow = QPushButton("Shadow Files")
+        self.btn_toggle_shadow.setCheckable(True)
+        self.btn_toggle_shadow.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
+        
+        self.btn_toggle_diff = QPushButton("Diff (Source vs Coped)")
+        self.btn_toggle_diff.setCheckable(True)
+        self.btn_toggle_diff.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
+        
+        row2.addWidget(self.btn_toggle_src)
+        row2.addWidget(self.btn_toggle_shadow)
+        row2.addWidget(self.btn_toggle_diff)
+        layout.addLayout(row2)
 
-        # Shadow context
-        self.chk_shadow_context = QCheckBox("Use Shadow Layer as Context")
-        layout.addWidget(self.chk_shadow_context)
-
-        # Text input
+        # 4. Input (Row 3)
+        # input_box[1]
         layout.addWidget(QLabel("AI Command / Code Input:"))
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("Enter AI commands or paste code...")
         layout.addWidget(self.text_input)
 
-        # Save Different / Save Shadow buttons
-        btn_shadow_layout = QHBoxLayout()
-        self.btn_diff = QPushButton("Save Different to chat.txt")
-        self.btn_diff.clicked.connect(self.save_different_to_chat)
-        self.btn_shadow = QPushButton("Save Shadow to Origin")
-        self.btn_shadow.clicked.connect(self.save_shadow_to_origin)
-        btn_shadow_layout.addWidget(self.btn_diff)
-        btn_shadow_layout.addWidget(self.btn_shadow)
-        layout.addLayout(btn_shadow_layout)
+        # 5. Actions (Row 4)
+        # [generate_chat_txt_button, Open_vs_code_button, toggle_switch[3]]
+        row4 = QHBoxLayout()
+        self.btn_gen_chat = QPushButton("Generate Prompt")
+        self.btn_gen_chat.clicked.connect(self.generate_chat)
+        
+        self.btn_open_ide = QPushButton("Open IDE")
+        self.btn_open_ide.clicked.connect(self.open_vscode_logic)
+        
+        # toggle_switch[3] "vscode from source or coped"
+        self.btn_toggle_vscode_mode = QPushButton("Target: Coped")
+        self.btn_toggle_vscode_mode.setCheckable(True)
+        self.btn_toggle_vscode_mode.setChecked(True)
+        self.btn_toggle_vscode_mode.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
+        self.btn_toggle_vscode_mode.setToolTip("Toggle ON to use Shadow/Coped (Extension), OFF for Source (Standard)")
+        
+        row4.addWidget(self.btn_gen_chat)
+        row4.addWidget(self.btn_open_ide)
+        row4.addWidget(self.btn_toggle_vscode_mode)
+        layout.addLayout(row4)
 
         # Log
         self.log_output = QTextEdit()
@@ -375,26 +539,153 @@ class EnterWindow(QWidget):
 
         self.setLayout(layout)
 
+    # ------------------------
+    # Helpers for New Buttons
+    # ------------------------
+    def open_source_manager(self):
+        # Open ProjectChooseWindow
+        self.proj_choose = ProjectChooseWindow(self.project_name, self.project_path, self.data)
+        self.proj_choose.show()
+
+    def open_shadow_manager_direct(self):
+        # Also Open ProjectChooseWindow (as per UIturn.py logic)
+        self.proj_choose_coped = ProjectChooseWindow(self.project_name, self.project_path, self.data)
+        self.proj_choose_coped.show()
+
+    def open_vscode_logic(self):
+        # Open ProjectChooseWindow first
+        self.proj_choose_vscode = ProjectChooseWindow(self.project_name, self.project_path, self.data)
+        self.proj_choose_vscode.selection_made.connect(self.decide_and_launch_vscode)
+        self.proj_choose_vscode.show()
+
+    def decide_and_launch_vscode(self):
+        # Decide based on toggle button
+        if self.btn_toggle_vscode_mode.isChecked():
+            # Coped / Shadow -> Extension
+            self.open_vscode_with_extension()
+        else:
+            # Source -> Standard VS Code
+            self.open_vscode_standard()
+
+    def open_vscode_standard(self):
+        try:
+            import subprocess
+            code_cmd = shutil.which("code")
+            # ... (Standard lookup logic, reusing what we had or simplifying)
+            if not code_cmd:
+                QMessageBox.warning(self, "Error", "VS Code not found.")
+                return
+            subprocess.Popen([code_cmd, self.project_path], shell=True)
+            self.log("VS Code (Standard) launched.")
+        except Exception as e:
+            self.log(f"Error: {e}")
+
     def log(self, message):
         self.log_output.append(message)
 
     # ------------------------
-    # Generate chat.txt
+    # Generate chat.txt (Updated with Toggles)
     # ------------------------
     def generate_chat(self):
         try:
+            selected_files = self.data["projects"][self.project_name].get("selected_files", [])
+            if not selected_files:
+                QMessageBox.warning(self, "Warning", "No files selected. Please select source files first.")
+                return
+
+            content = ""
+            
+            # 1. System Prompt (Reuse existing or simplified)
+            content += "# System Instructions\n"
+            content += "You are an AI coding assistant.\n\n"
+            
+            # 2. Input Prompt
+            user_input = self.text_input.toPlainText()
+            if user_input:
+                content += "# User Input / Commands\n" + user_input + "\n\n"
+
+            # 3. Source Files
+            if self.btn_toggle_src.isChecked():
+                content += "# Source Files\n"
+                for file_path in selected_files:
+                    if os.path.exists(file_path):
+                        rel = os.path.relpath(file_path, self.project_path)
+                        content += f"## {rel}\n```\n"
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                content += f.read()
+                        except: content += "(Error reading file)"
+                        content += "\n```\n\n"
+
+            # 4. Shadow Files
+            if self.btn_toggle_shadow.isChecked():
+                content += "# Shadow Files\n"
+                shadow_root = os.path.join("file", "shadow")
+                for file_path in selected_files:
+                    rel = os.path.relpath(file_path, self.project_path)
+                    shadow_path = os.path.join(shadow_root, rel)
+                    if os.path.exists(shadow_path):
+                        content += f"## (Shadow) {rel}\n```\n"
+                        try:
+                            with open(shadow_path, "r", encoding="utf-8") as f:
+                                content += f.read()
+                        except: content += "(Error reading file)"
+                        content += "\n```\n\n"
+
+            # 5. Diff Report
+            if self.btn_toggle_diff.isChecked():
+                diff_report = self.get_diff_report()
+                if diff_report:
+                    content += "# Diff Report (Source -> Shadow)\n"
+                    content += diff_report + "\n\n"
+
+            # Save
             chat_folder = os.path.join("file", self.project_name)
             os.makedirs(chat_folder, exist_ok=True)
             chat_path = os.path.join(chat_folder, "chat.txt")
-            if not os.path.exists(chat_path):
-                with open(chat_path, "w", encoding="utf-8") as f:
-                    f.write(f"# Chat log for project {self.project_name}\n")
-                self.log(f"chat.txt created at: {os.path.abspath(chat_path)}")
-            else:
-                self.log(f"chat.txt already exists at: {os.path.abspath(chat_path)}")
+            
+            with open(chat_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+            self.log(f"chat.txt generated ({len(content)} chars).")
             self.btn_copy.setEnabled(True)
+            self.copy_chat() # Auto-copy convenience
+            
         except Exception as e:
             self.log(f"Error generating chat.txt: {e}")
+
+    def get_diff_report(self):
+        try:
+            shadow_root = os.path.join("file", "shadow")
+            if not os.path.exists(shadow_root):
+                return None
+            
+            import difflib
+            diffs = []
+            # Compare ALL files in shadow? or just selected? prompt didn't specify. 
+            # Ideally comprehensive diff.
+            for root, dirs, files in os.walk(shadow_root):
+                for file in files:
+                    shadow_file = os.path.join(root, file)
+                    rel = os.path.relpath(shadow_file, shadow_root)
+                    origin_file = os.path.join(self.project_path, rel)
+                    
+                    with open(shadow_file, 'r', encoding='utf-8') as f: shadow_lines = f.readlines()
+                    if os.path.exists(origin_file):
+                        with open(origin_file, 'r', encoding='utf-8') as f: origin_lines = f.readlines()
+                    else: origin_lines = [] # New file
+
+                    matcher = difflib.SequenceMatcher(None, origin_lines, shadow_lines)
+                    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                        if tag == "replace":
+                            diffs.append(f"{rel} replace@{i1+1}-{i2}{{\n{''.join(shadow_lines[j1:j2])}}}")
+                        elif tag == "delete":
+                            diffs.append(f"{rel} del@{i1+1}-{i2}")
+                        elif tag == "insert":
+                            diffs.append(f"{rel} add@{i1}{{\n{''.join(shadow_lines[j1:j2])}}}")
+            
+            return "\n".join(diffs) if diffs else "No differences found."
+        except: return None
 
     # ------------------------
     # Copy chat.txt

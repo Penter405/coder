@@ -1,0 +1,4 @@
+we have finish project choose window base.
+next steop:
+1. workful project choose window. at Open vs code button, we only allow one project be choose. can show files in it. but all file is okay to be edit by developer. we dont need to let developer to choose file in project. only need to let choose project
+2. make sure the extension of vscode is workful. 
