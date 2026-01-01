@@ -26,22 +26,28 @@ export class ChangeApplier {
      * END
      * ```
      */
-    parseChanges(aiResponse: string): FileChange[] {
+    parseChanges(aiResponse: string, rootPath?: string): FileChange[] {
         const changes: FileChange[] = [];
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+        const workspaceRoot = rootPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
         // 1. Extract Penter Block
         // Search for ```penter ... ```
-        const blockMatch = /```penter\s*([\s\S]*?)```/.exec(aiResponse);
-        if (!blockMatch) {
-            // Fallback? Or strict? 
-            // User spec says: "It IGNORES all text outside penter code blocks"
-            // So we return empty if no penter block.
-            console.log("No penter block found.");
-            return [];
-        }
+        const blockMatch = /```\s*penter\s*([\s\S]*?)```/i.exec(aiResponse);
 
-        const blockContent = blockMatch[1].trim();
+        let blockContent = '';
+        if (blockMatch) {
+            blockContent = blockMatch[1].trim();
+        } else {
+            // Fallback: Check if the text itself looks like PCL commands
+            // (User might have copied content without backticks)
+            if (/^(FILE|CREATE|DELETE|RENAME|MKDIR|RMDIR)\s+/m.test(aiResponse)) {
+                console.log("No penter block found, but text looks like PCL. Using raw text.");
+                blockContent = aiResponse.trim();
+            } else {
+                console.log("No penter block found and text does not look like PCL.");
+                return [];
+            }
+        }
 
         // 2. Check for NO_OP
         if (blockContent.includes("NO_OP")) {
@@ -144,6 +150,73 @@ export class ChangeApplier {
 
                 this.executeRemove(fileLines, start, end);
             }
+            else if (trimmed.startsWith('CREATE ')) {
+                // CREATE path - Create new file with following content
+                const relPath = trimmed.substring(7).trim();
+                const filePath = this.resolveFilePath(relPath, workspaceRoot);
+
+                // Expect content to follow (same as ADD with <<<>>>)
+                if (i + 1 < lines.length && lines[i + 1].trim() === '<<<') {
+                    isReadingCode = true;
+                    currentFile = filePath;
+                    fileLines = []; // Start with empty file
+                    insertLine = 0; // Insert at beginning
+                    i++; // Skip <<<
+                }
+            }
+            else if (trimmed.startsWith('DELETE ')) {
+                // DELETE path - Mark file for deletion
+                const relPath = trimmed.substring(7).trim();
+                const filePath = this.resolveFilePath(relPath, workspaceRoot);
+                changes.push({
+                    filePath: filePath,
+                    content: '',
+                    action: 'delete'
+                });
+            }
+            else if (trimmed.startsWith('RENAME ')) {
+                // RENAME oldPath newPath
+                const parts = trimmed.substring(7).trim().split(/\s+/);
+                if (parts.length >= 2) {
+                    const oldPath = this.resolveFilePath(parts[0], workspaceRoot);
+                    const newPath = this.resolveFilePath(parts[1], workspaceRoot);
+                    // For rename, we read old file and write to new location, then delete old
+                    if (fs.existsSync(oldPath)) {
+                        const content = fs.readFileSync(oldPath, 'utf8');
+                        changes.push({
+                            filePath: newPath,
+                            content: content,
+                            action: 'create'
+                        });
+                        changes.push({
+                            filePath: oldPath,
+                            content: '',
+                            action: 'delete'
+                        });
+                    }
+                }
+            }
+            else if (trimmed.startsWith('MKDIR ')) {
+                // MKDIR path - Create directory (handle in applyChanges)
+                const relPath = trimmed.substring(6).trim();
+                const dirPath = this.resolveFilePath(relPath, workspaceRoot);
+                // Use a special action for directory creation
+                changes.push({
+                    filePath: dirPath,
+                    content: '__MKDIR__',
+                    action: 'create'
+                });
+            }
+            else if (trimmed.startsWith('RMDIR ')) {
+                // RMDIR path - Remove directory
+                const relPath = trimmed.substring(6).trim();
+                const dirPath = this.resolveFilePath(relPath, workspaceRoot);
+                changes.push({
+                    filePath: dirPath,
+                    content: '__RMDIR__',
+                    action: 'delete'
+                });
+            }
         }
 
         // Save last file
@@ -194,6 +267,9 @@ export class ChangeApplier {
     }
 
     private resolveFilePath(filePath: string, workspaceRoot: string): string {
+        // Strip [Source] or [Coped] tags (case insensitive, flexible spacing)
+        filePath = filePath.replace(/^\[(Source|Coped)\]\s*/i, '');
+
         // Remove common prefixes
         filePath = filePath.replace(/^(file:\/\/|\.\/|\/)/g, '');
 

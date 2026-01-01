@@ -10,7 +10,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -113,6 +115,18 @@
           "command": "aiCoder.discardShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",
           "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "aiCoder.applyChanges",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aiCoder.applyChanges",
+          "group": "aiCoder"
         }
       ]
     },

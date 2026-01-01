@@ -65,9 +65,11 @@ class FileItem extends vscode.TreeItem {
     }
     updateCheckbox() {
         if (!this.isDirectory) {
-            this.iconPath = this.selected
-                ? new vscode.ThemeIcon('check', new vscode.ThemeColor('charts.green'))
-                : new vscode.ThemeIcon('circle-large-outline');
+            this.checkboxState = this.selected
+                ? vscode.TreeItemCheckboxState.Checked
+                : vscode.TreeItemCheckboxState.Unchecked;
+            // Clear iconPath so it uses default file icon
+            this.iconPath = vscode.ThemeIcon.File;
         }
     }
 }
@@ -79,6 +81,19 @@ class FileTreeProvider {
         this.selectedFiles = new Set();
         this.rootItems = [];
         this.loadSavedSelection();
+        // Watch for chat.txt changes to auto-sync selection
+        if (vscode.workspace.workspaceFolders) {
+            const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/{chat.txt,file/chat.txt}'));
+            watcher.onDidChange(() => {
+                this.loadSavedSelection();
+                this.refresh();
+            });
+            watcher.onDidCreate(() => {
+                this.loadSavedSelection();
+                this.refresh();
+            });
+        }
     }
     refresh() {
         this._onDidChangeTreeData.fire();
@@ -199,11 +214,54 @@ class FileTreeProvider {
     loadSavedSelection() {
         if (!vscode.workspace.workspaceFolders)
             return;
-        const configPath = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, '.vscode', 'ai-coder.json');
+        const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        const configPath = path.join(root, '.vscode', 'ai-coder.json');
+        // First try chat.txt (Sync from ConsoleWindow)
+        // Check both root/chat.txt and files/chat.txt (path config-dependent)
+        const config = vscode.workspace.getConfiguration('aiCoder');
+        const outputFile = config.get('outputFile', 'chat.txt');
+        const possiblePaths = [
+            path.join(root, outputFile),
+            path.join(root, 'file', 'chat.txt')
+        ];
+        let loadedFromChat = false;
+        for (const chatPath of possiblePaths) {
+            if (fs.existsSync(chatPath)) {
+                try {
+                    const content = fs.readFileSync(chatPath, 'utf8');
+                    // Regex to find ## [Tag] path
+                    const matches = content.match(/^## \[(?:Source|Coped)\] (.*)$/gm);
+                    if (matches) {
+                        this.selectedFiles.clear();
+                        matches.forEach(m => {
+                            // m is like "## [Source] path/to/file.py"
+                            // Extract path
+                            const match = /^## \[(?:Source|Coped)\] (.*)$/.exec(m);
+                            if (match) {
+                                let relPath = match[1].trim();
+                                const absPath = path.join(root, relPath);
+                                this.selectedFiles.add(absPath);
+                            }
+                        });
+                        loadedFromChat = true;
+                        break;
+                    }
+                }
+                catch (e) {
+                    console.error('Error reading chat.txt:', e);
+                }
+            }
+        }
+        if (loadedFromChat) {
+            return;
+        }
+        // Fallback to saved json config
         try {
             if (fs.existsSync(configPath)) {
                 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                this.selectedFiles = new Set(config.selectedFiles || []);
+                if (config.selectedFiles) {
+                    this.selectedFiles = new Set(config.selectedFiles);
+                }
             }
         }
         catch (error) {

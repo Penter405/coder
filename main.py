@@ -1624,22 +1624,34 @@ class EnterWindow(QWidget):
                      abs_selected.add(os.path.normcase(os.path.abspath(p)))
 
             # Context Roots
-            source_root = os.path.abspath(self.project_path)
-            coped_context = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", self.project_name, "shadow"))
             script_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Get Source Context (might be Origin or a Coped project)
+            source_context = self.data["projects"][self.project_name].get("source_context", self.project_path)
+            if os.path.isabs(source_context):
+                source_root = source_context
+            else:
+                source_root = os.path.join(script_dir, source_context)
+            source_root = os.path.abspath(source_root)
+            
+            # Get Coped Context
+            coped_context = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", self.project_name, "shadow"))
             if os.path.isabs(coped_context):
                 coped_root = coped_context
             else:
                 coped_root = os.path.join(script_dir, coped_context)
+            coped_root = os.path.abspath(coped_root)
 
             # Gather files based on toggles
             if self.btn_toggle_src.isChecked():
                 for p in abs_selected:
-                    if p.startswith(os.path.normcase(source_root) + os.sep):
+                    # Match if file is within source_root OR is source_root itself
+                    if p.startswith(os.path.normcase(source_root) + os.sep) or p == os.path.normcase(source_root):
                          final_files.add(p)
 
             if self.btn_toggle_shadow.isChecked():
                 for p in abs_selected:
+                    # Match if file is within coped_root OR is coped_root itself
                     if p.startswith(os.path.normcase(coped_root) + os.sep) or p == os.path.normcase(coped_root):
                         final_files.add(p)
 
@@ -1684,10 +1696,17 @@ class EnterWindow(QWidget):
                 f.write("```\n\n")
                 
                 f.write("### PCL Commands\n")
+                f.write("**File Operations:**\n")
                 f.write("- `FILE path`: Specifies the target file (relative to project root)\n")
                 f.write("- `ADD lineNumber`: Insert content AFTER the specified line (use 0 for file start)\n")
                 f.write("- `REMOVE startLine-endLine`: Delete lines in the range (inclusive)\n")
-                f.write("- `REMOVE lineNumber`: Delete a single line\n\n")
+                f.write("- `REMOVE lineNumber`: Delete a single line\n")
+                f.write("\n**File/Folder Management:**\n")
+                f.write("- `CREATE path`: Create a new file (content follows until next command)\n")
+                f.write("- `DELETE path`: Delete a file\n")
+                f.write("- `RENAME oldPath newPath`: Rename or move a file\n")
+                f.write("- `MKDIR path`: Create a directory\n")
+                f.write("- `RMDIR path`: Remove an empty directory\n\n")
                 
                 f.write("### PCL Rules\n")
                 f.write("1. Always start with a FILE command\n")
@@ -1702,13 +1721,50 @@ class EnterWindow(QWidget):
                 f.write("- Reference specific line numbers from the provided files\n")
                 f.write("- After PCL block, you may add summary/notes\n\n")
                 
+                # Check if Diff toggle is ON
+                show_diff = self.btn_toggle_diff.isChecked()
+                
+                if show_diff:
+                    f.write("# Differences (Source vs Coped)\n\n")
+                    # Generate diff for files that exist in both contexts
+                    import difflib
+                    for file_path in sorted(final_files):
+                        try:
+                            # Determine which context this file belongs to
+                            if file_path.startswith(os.path.normcase(source_root)):
+                                rel_path = os.path.relpath(file_path, source_root)
+                                counterpart = os.path.join(coped_root, rel_path)
+                                if os.path.exists(counterpart):
+                                    f.write(f"## {rel_path}\n\n")
+                                    with open(file_path, "r", encoding="utf-8", errors="ignore") as src:
+                                        source_lines = src.readlines()
+                                    with open(counterpart, "r", encoding="utf-8", errors="ignore") as cop:
+                                        coped_lines = cop.readlines()
+                                    
+                                    diff = difflib.unified_diff(source_lines, coped_lines, 
+                                                                fromfile=f"Source: {rel_path}",
+                                                                tofile=f"Coped: {rel_path}",
+                                                                lineterm="")
+                                    f.write("```diff\n")
+                                    for line in diff:
+                                        f.write(line + "\n")
+                                    f.write("```\n\n")
+                        except Exception as e:
+                            f.write(f"(Error generating diff for {file_path}: {e})\n\n")
+                    f.write("\n")
+                
                 f.write("# Selected Files\n\n")
                 
                 # Write file contents with line numbers
                 for file_path in sorted(final_files):
                     try:
-                        rel_path = os.path.relpath(file_path, source_root if file_path.startswith(os.path.normcase(source_root)) else coped_root)
-                        f.write(f"## {rel_path}\n\n")
+                        # Determine context for tagging
+                        is_source = file_path.startswith(os.path.normcase(source_root))
+                        tag = "[Source]" if is_source else "[Coped]"
+                        
+                        # Use path relative to Script Dir (Project Root) to ensure uniqueness
+                        rel_path = os.path.relpath(file_path, script_dir)
+                        f.write(f"## {tag} {rel_path}\n\n")
                         
                         with open(file_path, "r", encoding="utf-8", errors="ignore") as src:
                             lines = src.readlines()

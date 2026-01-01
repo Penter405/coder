@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { FileTreeProvider, FileItem } from './fileSelector';
 import { ChatGenerator } from './chatGenerator';
 import { ChangeApplier } from './changeApplier';
@@ -7,6 +8,7 @@ import { ShadowTreeProvider, ShadowFileItem } from './shadowExplorer';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Coder Helper is now active!');
+    vscode.window.showInformationMessage('AI Coder Helper is now active!');
 
     // Initialize the file tree provider
     const fileTreeProvider = new FileTreeProvider();
@@ -119,36 +121,90 @@ export function activate(context: vscode.ExtensionContext) {
     // Apply changes from AI response
     context.subscriptions.push(
         vscode.commands.registerCommand('aiCoder.applyChanges', async () => {
-            // Get text from clipboard
-            const clipboardText = await vscode.env.clipboard.readText();
+            let penterContent = '';
+            let source = '';
 
-            if (!clipboardText) {
-                vscode.window.showWarningMessage('Clipboard is empty. Copy AI response first.');
+            // 1. Try reading from chat.txt (Prioritize chat.txt as requested)
+            const config = vscode.workspace.getConfiguration('aiCoder');
+            const outputFile = config.get<string>('outputFile', 'chat.txt');
+            if (vscode.workspace.workspaceFolders) {
+                const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const chatPath = path.join(workspaceRoot, outputFile); // Or file/chat.txt? Main app saves to file/chat.txt
+                // Wait, Main App saves to "file/chat.txt" relative to script dir.
+                // Assuming workspaceRoot is the same as script dir.
+                // Let's check "file/chat.txt" first, then "chat.txt".
+
+                const pathsToCheck = [
+                    path.join(workspaceRoot, 'file', 'chat.txt'),
+                    path.join(workspaceRoot, outputFile)
+                ];
+
+                for (const p of pathsToCheck) {
+                    if (fs.existsSync(p)) {
+                        const content = fs.readFileSync(p, 'utf8');
+                        // Find LAST Penter block (robust regex)
+                        const matches = content.match(/```\s*penter([\s\S]*?)```/gi);
+                        if (matches && matches.length > 0) {
+                            penterContent = matches[matches.length - 1];
+                            source = `chat.txt (${path.basename(p)})`;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 2. If no penter in chat.txt, try Clipboard
+            if (!penterContent) {
+                penterContent = await vscode.env.clipboard.readText();
+                source = 'Clipboard';
+            }
+
+            if (!penterContent) {
+                vscode.window.showWarningMessage('No Penter code found in chat.txt or Clipboard.');
                 return;
             }
 
             try {
-                const changes = changeApplier.parseChanges(clipboardText);
+                // Apply to Shadow Layer
+                if (!vscode.workspace.workspaceFolders) return;
+                const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const shadowRoot = path.join(root, 'file', 'shadow');
+
+                // Ensure shadow dir exists
+                if (!fs.existsSync(shadowRoot)) {
+                    fs.mkdirSync(shadowRoot, { recursive: true });
+                }
+
+                // Parse changes applying to Shadow Root
+                const changes = changeApplier.parseChanges(penterContent, shadowRoot);
 
                 if (changes.length === 0) {
-                    vscode.window.showWarningMessage('No file changes detected in clipboard content.');
+                    vscode.window.showWarningMessage(`No valid Penter commands found in ${source}.`);
                     return;
                 }
 
-                // Show preview and confirm
-                const confirmApply = await vscode.window.showQuickPick(['Yes', 'No'], {
-                    placeHolder: `Apply changes to ${changes.length} file(s)?`
+                const confirmApply = await vscode.window.showQuickPick(['Review in Shadow Layer', 'Cancel'], {
+                    placeHolder: `Found ${changes.length} changes in ${source}. Proceed to Review?`
                 });
 
-                if (confirmApply === 'Yes') {
+                if (confirmApply === 'Review in Shadow Layer') {
                     await changeApplier.applyChanges(changes);
-                    vscode.window.showInformationMessage(`Applied changes to ${changes.length} file(s).`);
+                    vscode.window.showInformationMessage(`Proposed changes saved to Shadow Layer. Please review in the sidebar.`);
+                    vscode.commands.executeCommand('aiCoderShadow.focus'); // Focus view
                 }
             } catch (error) {
-                vscode.window.showErrorMessage(`Failed to apply changes: ${error}`);
+                vscode.window.showErrorMessage(`Failed to process changes: ${error}`);
             }
         })
     );
+
+    // Status Bar Item
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.command = 'aiCoder.applyChanges';
+    statusBarItem.text = '$(check) Apply AI Changes';
+    statusBarItem.tooltip = 'Apply Penter changes from clipboard';
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
 
     // Refresh file list
     context.subscriptions.push(
