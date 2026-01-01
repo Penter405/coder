@@ -55,7 +55,7 @@ def isuseable(a):
 
 #window initialize
 main_window=window("coder",[500,220])
-control_file_window=window("control selected files",[600,500])
+console_window=window("console",[600,500])
 enter_window=window(f"workspace of project {project_name}",[700,600])
 coped_project_choose_window=window("choose coped project to enter",[700,500])#may not be used
 save_from_coped_to_origin_project_window=window("save from coped to origin project",[700,500])#may not be used
@@ -64,14 +64,16 @@ vs_code="VS Code with our extension, not python window"
 #initialize
 
 #in main_window
-control_selected_file_button=button("control selected files")
+console_button=button("console")
 enter_button=button("enter")
 exit_button=button("exit")
 
-#in control_file_window
-input_box.append("可以勾選的選單，資料夾可以展開")#index 0
-apply_button=button("apply")#apply the change in input_box[0]
-cancel_button=button("cancel")#cancel action
+#in console_window
+input_box.append("可以勾選的選單，資料夾可以展開.層級一:origin project or coped project,層級二:file and folder in origin project or coped project. 層級1可以點選,點了會有mark,mark用來實施其他按鈕的功能,若點選非層級一,mark取消,層級二可以勾選,用來控制selected file")#index 0
+apply_button=button("apply selected")#apply the change in input_box[0]
+cancel_button=button("cancel selected")#cancel action
+add_button=button("add")#add coped project 
+delete_button=button("delete")#delete coped project
 #in enter_window
 source_button=button("source")
 coped_button=button("coped")
@@ -81,6 +83,8 @@ toggle_switch.append("different from source to coped")
 input_box.append("可以輸入的框")#index 1
 Open_vs_code_button=button("Open IDE of source")
 generate_chat_txt_button=button("generate prompt")
+copy_chat_txt_button=button("copy chat.txt")
+paste_ai_response_button=button("paste ai response to chat.txt")
 toggle_switch.append("vscode from source or coped")#index 4
 output_box.append("Log 輸出")#index 0
 #in project_choose_window
@@ -105,23 +109,31 @@ if click(exit_button):
 main_window.from_buttom_see=[[control_selected_file_button,enter_button,exit_button]]#if list in it,it means from left to right
 main_window.from_top_see=[f"Currect Project: {project_name}",f"Path: {project_path}"]
 #Control selected files window
-if isuseable(control_file_window):
+if isuseable(console_window):
     ##ui
     from_top_see=[f"Project: {project_name}",f"Path: {project_path}",input_box[0]]
     from_buttom_see=[[apply_button,cancel_button]]
     ##logic
     if click(apply_button):
         print("save the change in input_box[0] to data.json")
-        control_file_window.close()
+        console_window.close()
     if click(cancel_button):
         print("cancel, not save any change")
-    if click(control_selected_file_button):
-        control_file_window.close()
+        console_window.close()
+    if click(add_button):
+        project_choose_window.open()
+        if "choose project":
+            print("import the project to new project")
+            print("open a window let user enter the name of new project")
+        if "no choose":
+            print("open a window let user enter the name of new project")
+    if click(delete_button):
+        print("open a window,to let user confirm to delete the project, must show the name of project")
 
 #enter_window
 if isuseable(enter_window):
     ##ui
-    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[source_button,coped_button],[rs for rs in toggle_switch[0:3]],input_box[1],[generate_chat_txt_button,Open_vs_code_button,toggle_switch[3]],output_box[0]]
+    from_top_see=[f"Project: {project_name}",f"Path: {project_path}",[source_button,coped_button],[rs for rs in toggle_switch[0:3]],input_box[1],[generate_chat_txt_button,Open_vs_code_button,toggle_switch[3]],[copy_chat_txt_button,paste_ai_response_button],output_box[0]]
     if click(source_button):
         project_choose_window.open()#code will know what is source project
     if click(coped_button):

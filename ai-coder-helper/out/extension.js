@@ -36,9 +36,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
 const fileSelector_1 = require("./fileSelector");
 const chatGenerator_1 = require("./chatGenerator");
 const changeApplier_1 = require("./changeApplier");
+const shadowExplorer_1 = require("./shadowExplorer");
 function activate(context) {
     console.log('AI Coder Helper is now active!');
     // Initialize the file tree provider
@@ -48,10 +50,29 @@ function activate(context) {
         treeDataProvider: fileTreeProvider,
         showCollapseAll: true
     });
+    // Shadow Explorer
+    const shadowProvider = new shadowExplorer_1.ShadowTreeProvider();
+    vscode.window.registerTreeDataProvider('aiCoderShadow', shadowProvider);
     // Initialize generators
     const chatGenerator = new chatGenerator_1.ChatGenerator();
     const changeApplier = new changeApplier_1.ChangeApplier();
     // Register commands
+    // Shadow Commands
+    context.subscriptions.push(vscode.commands.registerCommand('aiCoder.diffShadow', (item) => {
+        const leftUri = vscode.Uri.file(item.realFilePath);
+        const rightUri = vscode.Uri.file(item.shadowFilePath);
+        const title = `${path.basename(item.realFilePath)} (Original) ↔ (Shadow)`;
+        vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('aiCoder.mergeShadow', async (item) => {
+        await shadowProvider.mergeFile(item);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('aiCoder.discardShadow', async (item) => {
+        const confirm = await vscode.window.showWarningMessage(`Discard changes for ${item.relativePath}?`, 'Yes', 'No');
+        if (confirm === 'Yes') {
+            await shadowProvider.discardFile(item);
+        }
+    }));
     // Toggle file selection when clicked
     context.subscriptions.push(vscode.commands.registerCommand('aiCoder.toggleFile', (item) => {
         fileTreeProvider.toggleSelection(item);

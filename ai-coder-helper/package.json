@@ -69,7 +69,8 @@
         {
           "id": "aiCoderFiles",
           "name": "Selected Files",
-          "type": "tree"
+          "type": "tree",
+          "icon": "$(list-unordered)"
         },
         {
           "id": "aiCoderShadow",
@@ -90,6 +91,11 @@
           "command": "aiCoder.refreshFiles",
           "when": "view == aiCoderFiles",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiCoder.applyChanges",
+          "when": "view == aiCoderFiles",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

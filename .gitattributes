@@ -1,0 +1,20 @@
+# Preserve existing line endings (don't convert)
+* text=auto
+
+# Mark text files
+*.py text
+*.js text
+*.ts text
+*.json text
+*.md text
+*.txt text
+*.sh text
+*.bat text
+*.cmd text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.webp binary

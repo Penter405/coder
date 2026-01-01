@@ -1,4 +1,6 @@
-we have finish project choose window base.
-next steop:
-1. workful project choose window. at Open vs code button, we only allow one project be choose. can show files in it. but all file is okay to be edit by developer. we dont need to let developer to choose file in project. only need to let choose project
-2. make sure the extension of vscode is workful. 
+we have done some logic:
+1.project process. but not sure if two origin project. will they see other coped project of origin project?
+2.prompt to LLM.
+there are some logic not finished:
+1.from LLM return, let developer contorl aspect or reject LLM return.
+2. make sure "difference" toggle switch at enter window will update our new language(it will show difference) or difference code into chat.txt with "Generate" button.

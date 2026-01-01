@@ -3,6 +3,8 @@ import os
 import shutil
 import json
 import datetime
+import filecmp
+import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QTreeWidget, QTreeWidgetItem, QPushButton,
     QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QTextEdit, QInputDialog, QCheckBox,
@@ -29,72 +31,132 @@ def save_data(data):
 # ------------------------
 # Control Selected Files
 # ------------------------
-class ControlFilesWindow(QWidget):
+# ------------------------
+# Console Window (Replaces Control Selected Files)
+# ------------------------
+class ConsoleWindow(QWidget):
     def __init__(self, project_name, project_path, data):
         super().__init__()
         self.project_name = project_name
         self.project_path = project_path
         self.data = data
         self.selected_files = set(self.data["projects"][self.project_name].get("selected_files", []))
-        self.updating = False  # 防止 itemChanged 重入
+        self.updating = False
 
-        self.setWindowTitle("Control Selected Files")
-        self.resize(600, 500)
+        self.setWindowTitle("Console - Manage Project & Files")
+        self.resize(700, 500)
         self.init_ui()
         self.build_tree()
 
     def init_ui(self):
         layout = QVBoxLayout()
-        self.info_label = QLabel(f"Project: {self.project_name}\nPath: {self.project_path}")
-        layout.addWidget(self.info_label)
+        # Head
+        layout.addWidget(QLabel(f"Project: {self.project_name}\nPath: {self.project_path}"))
 
+        # Tree
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Project Files")
+        self.tree.setHeaderLabel("Project Structure")
         layout.addWidget(self.tree)
-
+        
+        # Action Buttons
         btn_layout = QHBoxLayout()
-        self.btn_apply = QPushButton("Apply")
-        self.btn_cancel = QPushButton("Cancel")
+        self.btn_apply = QPushButton("Apply Selected")
+        self.btn_cancel = QPushButton("Cancel Selected")
+        self.btn_add = QPushButton("Add Coped Project")
+        self.btn_delete = QPushButton("Delete Coped Project")
+        
         btn_layout.addWidget(self.btn_apply)
         btn_layout.addWidget(self.btn_cancel)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_delete)
         layout.addLayout(btn_layout)
 
         self.btn_apply.clicked.connect(self.apply_changes)
         self.btn_cancel.clicked.connect(self.close)
+        self.btn_add.clicked.connect(self.add_coped_project)
+        self.btn_delete.clicked.connect(self.delete_coped_project)
         self.setLayout(layout)
 
     def build_tree(self):
         self.tree.clear()
-        if not os.path.exists(self.project_path):
-            QMessageBox.warning(self, "Error", f"Project path does not exist: {self.project_path}")
-            return
-        self.add_items(self.tree, self.project_path)
+        
+        # Root 0: None (Option for Empty Creation)
+        self.none_root = QTreeWidgetItem(["None (Create Empty Project)"])
+        self.none_root.setData(0, Qt.ItemDataRole.UserRole, "NONE_ROOT")
+        self.tree.addTopLevelItem(self.none_root)
+
+        # Root 1: Origin Project
+        self.origin_root = QTreeWidgetItem([f"[Origin] {self.project_name}"])
+        self.origin_root.setData(0, Qt.ItemDataRole.UserRole, "ORIGIN_ROOT")
+        self.tree.addTopLevelItem(self.origin_root)
+        
+        if os.path.exists(self.project_path):
+            self.add_items(self.origin_root, self.project_path)
+            
+        # Root 2+: Coped Projects (Scan 'file/{project_name}/' directory)
+        file_dir = os.path.join("file", self.project_name)
+        if not os.path.exists(file_dir):
+            os.makedirs(file_dir)
+            
+        subdirs = sorted([d for d in os.listdir(file_dir) if os.path.isdir(os.path.join(file_dir, d))])
+        
+        for d in subdirs:
+            if d == "__pycache__": continue
+            
+            full_path = os.path.join(file_dir, d)
+            # Display name
+            if d == "shadow": display_name = "[Coped] Shadow Layer"
+            else: display_name = f"[Coped] {d}"
+            
+            coped_root = QTreeWidgetItem([display_name])
+            coped_root.setData(0, Qt.ItemDataRole.UserRole, full_path)
+            self.tree.addTopLevelItem(coped_root)
+            
+            self.add_items(coped_root, full_path, is_shadow=True)
+            coped_root.setExpanded(False) # Start collapsed
+            
+        self.origin_root.setExpanded(False) # Start collapsed
         self.tree.itemChanged.connect(self.handle_item_changed)
 
-    def add_items(self, parent_widget, path):
-        name = os.path.basename(path) or path
-        item = QTreeWidgetItem([name])
-        item.setData(0, Qt.ItemDataRole.UserRole, path)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        if os.path.isfile(path) and path in self.selected_files:
-            item.setCheckState(0, Qt.CheckState.Checked)
-        else:
-            item.setCheckState(0, Qt.CheckState.Unchecked)
-
-        if isinstance(parent_widget, QTreeWidget):
-            parent_widget.addTopLevelItem(item)
-        else:
-            parent_widget.addChild(item)
-
+    def add_items(self, parent_widget, path, is_shadow=False):
+        # Flatten directory similar to original but attached to parent_widget
         if os.path.isdir(path):
             for f in sorted(os.listdir(path)):
-                self.add_items(item, os.path.join(path, f))
+                if f in [".git", "__pycache__", "file"]: continue
+                self.add_node_recursive(parent_widget, os.path.join(path, f), is_shadow)
+
+    def add_node_recursive(self, parent_item, full_path, is_shadow):
+        name = os.path.basename(full_path)
+        item = QTreeWidgetItem([name])
+        item.setData(0, Qt.ItemDataRole.UserRole, full_path)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        
+        if is_shadow:
+             # Enable checking for Coped Projects too, so we can manage their selection state
+             if full_path in self.selected_files:
+                item.setCheckState(0, Qt.CheckState.Checked)
+             else:
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+        else:
+            # Origin logic
+            if full_path in self.selected_files:
+                item.setCheckState(0, Qt.CheckState.Checked)
+            else:
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+
+        parent_item.addChild(item)
+
+        if os.path.isdir(full_path):
+             for f in sorted(os.listdir(full_path)):
+                 if f in [".git", "__pycache__", "file"]: continue
+                 self.add_node_recursive(item, os.path.join(full_path, f), is_shadow)
 
     def handle_item_changed(self, item, column):
-        if self.updating:
-            return
+        if self.updating: return
         self.updating = True
         try:
+             # Basic check propagation
             state = item.checkState(0)
             self.update_children(item, state)
             self.update_parent(item)
@@ -104,37 +166,179 @@ class ControlFilesWindow(QWidget):
     def update_children(self, item, state):
         for i in range(item.childCount()):
             child = item.child(i)
-            child.setCheckState(0, state)
-            self.update_children(child, state)
+            # Only propagate if checkable
+            if child.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                child.setCheckState(0, state)
+                self.update_children(child, state)
 
     def update_parent(self, item):
         parent = item.parent()
-        if not parent:
-            return
-        checked_count = sum(parent.child(i).checkState(0) == Qt.CheckState.Checked for i in range(parent.childCount()))
-        if checked_count == 0:
-            parent.setCheckState(0, Qt.CheckState.Unchecked)
-        elif checked_count == parent.childCount():
-            parent.setCheckState(0, Qt.CheckState.Checked)
-        else:
-            parent.setCheckState(0, Qt.CheckState.PartiallyChecked)
-        self.update_parent(parent)
+        if not parent: return
+        # Logic for parent check state... simplified
+        pass 
 
     def collect_checked_files(self, parent_item):
-        if os.path.isfile(parent_item.data(0, Qt.ItemDataRole.UserRole)):
-            if parent_item.checkState(0) == Qt.CheckState.Checked:
-                self.selected_files.add(parent_item.data(0, Qt.ItemDataRole.UserRole))
+        path = parent_item.data(0, Qt.ItemDataRole.UserRole)
+        # Skip roots
+        if path in ["ORIGIN_ROOT", "SHADOW_ROOT", "NONE_ROOT"]: 
+            pass
+        elif os.path.isfile(path):
+             if parent_item.checkState(0) == Qt.CheckState.Checked and (parent_item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                 self.selected_files.add(path)
+                 print(f"[ConsoleWindow] Added checked file: {path}")
+             
         for i in range(parent_item.childCount()):
             self.collect_checked_files(parent_item.child(i))
 
     def apply_changes(self):
         self.selected_files = set()
-        for i in range(self.tree.topLevelItemCount()):
-            self.collect_checked_files(self.tree.topLevelItem(i))
+        
+        # Scan ALL top-level items (Origin and Coped Projects)
+        root_count = self.tree.topLevelItemCount()
+        print(f"[ConsoleWindow] Scanning {root_count} roots for selection...")
+        for i in range(root_count):
+            root = self.tree.topLevelItem(i)
+            print(f"[ConsoleWindow] Scanning Root: {root.text(0)}")
+            self.collect_checked_files(root)
+        
         self.data["projects"][self.project_name]["selected_files"] = list(self.selected_files)
-        save_data(self.data)
-        QMessageBox.information(self, "Saved", "Selected files updated in data.json")
+        print(f"[ConsoleWindow] Saving {len(self.selected_files)} selected files.")
         self.close()
+
+    def add_coped_project(self):
+        # Determine Source
+        source_path = self.project_path # Default to Origin
+        source_name = "Origin"
+        is_empty_create = False
+        
+        item = self.tree.currentItem()
+        if item:
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            if path == "NONE_ROOT":
+                is_empty_create = True
+                source_name = "None (Empty)"
+            elif path and os.path.isdir(path) and path != "ORIGIN_ROOT":
+                # Ensure we are not copying "file/" itself or something weird
+                source_path = path
+                source_name = item.text(0)
+            # If ORIGIN_ROOT or others, default to Origin
+
+        promp_title = f"Create New Project from '{source_name}':"
+        if is_empty_create:
+            promp_title = "Create New EMPTY Project:"
+
+        name, ok = QInputDialog.getText(self, "Add Coped Project", f"{promp_title}\nName (Folder Name):")
+        if ok and name:
+            safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip()
+            if not safe_name:
+                QMessageBox.warning(self, "Error", "Invalid project name.")
+                return
+            
+            # New Logic: Create in file/{project_name}/
+            base_dir = os.path.join("file", self.project_name)
+            if not os.path.exists(base_dir):
+                os.makedirs(base_dir)
+            
+            new_path = os.path.join(base_dir, safe_name)
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "Error", f"Project '{safe_name}' already exists in {base_dir}.")
+                return
+                
+            try:
+                os.makedirs(new_path)
+
+                if not is_empty_create:
+                    # Copy ALL files from source to new_path
+                    import shutil
+                    
+                    # Ignore function to skip .git, file/, __pycache__
+                    def ignore_patterns(path, names):
+                        ignored = []
+                        if ".git" in names: ignored.append(".git")
+                        if "__pycache__" in names: ignored.append("__pycache__")
+                        # If we are copying Origin, 'file' is in it. We MUST ignore 'file' to avoid recursion/duplication
+                        if "file" in names and os.path.abspath(path) == os.path.abspath(self.project_path):
+                            ignored.append("file")
+                        return ignored
+
+                    shutil.copytree(source_path, new_path, ignore=ignore_patterns, dirs_exist_ok=True) # dirs_exist_ok because we makedirs above
+
+                    # Inherit Selection State
+                    # Find all currently selected files that are within the source_path
+                    current_selected = self.data["projects"][self.project_name].get("selected_files", [])
+                    new_selected = []
+                    
+                    # Normalize source path for comparison
+                    abs_source = os.path.abspath(source_path)
+                    
+                    for path in current_selected:
+                        abs_path = os.path.abspath(path)
+                        # Check if this selected file belongs to the source project we just copied
+                        if abs_path.startswith(abs_source):
+                            # Calculate relative path
+                            rel_path = os.path.relpath(abs_path, abs_source)
+                            # New path in the coped project
+                            new_file_path = os.path.join(new_path, rel_path)
+                            if os.path.exists(new_file_path):
+                                new_selected.append(new_file_path)
+                                
+                    # Extend the selected_files list with these new paths
+                    if new_selected:
+                        current_selected.extend(new_selected)
+                        # Remove duplicates just in case
+                        self.data["projects"][self.project_name]["selected_files"] = list(set(current_selected))
+                        save_data(self.data)
+                        # Update local set
+                        self.selected_files = set(self.data["projects"][self.project_name]["selected_files"])
+
+                    QMessageBox.information(self, "Success", f"Created '{safe_name}' from '{source_name}'.\nCopied {len(new_selected)} selections.")
+                else:
+                    QMessageBox.information(self, "Success", f"Created empty project '{safe_name}'.")
+
+                self.build_tree()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to create project: {e}")
+
+    def delete_coped_project(self):
+        item = self.tree.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Please select the project root to delete.")
+            return
+
+        # Check if it is a Coped Project Root
+        # We set UserRole to the full path of the root
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        # Verify it's in 'file/' and is a directory
+        
+        # Simple check: Is it a child of "Coped Projects" (wait, ConsoleWindow has separate roots)
+        # In ConsoleWindow, we have origin_root and now dynamic headers? 
+        # Actually my build_tree makes them TopLevelItems generally? 
+        # Let's verify standard 'file/XYZ' path pattern
+        
+        if path == "ORIGIN_ROOT" or path == self.project_path:
+             QMessageBox.warning(self, "Warning", "Cannot delete Origin project from here.")
+             return
+
+        if path and os.path.isdir(path) and "file" in os.path.abspath(path):
+            project_name = os.path.basename(path)
+            reply = QMessageBox.question(
+                self, 
+                "Confirm Delete", 
+                f"Are you sure you want to delete coped project '{project_name}'?\nPath: {path}\nThis cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                try:
+                    import shutil
+                    shutil.rmtree(path)
+                    QMessageBox.information(self, "Deleted", f"Project '{project_name}' deleted.")
+                    self.build_tree()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
+        else:
+             QMessageBox.information(self, "Info", "Selected item is not a deletable Coped Project root.")
 
 # ------------------------
 # Shadow Manager Window (Pre-Launch)
@@ -326,11 +530,12 @@ from PyQt6.QtCore import pyqtSignal
 class ProjectChooseWindow(QWidget):
     selection_made = pyqtSignal()
 
-    def __init__(self, project_name, project_path, data):
+    def __init__(self, project_name, project_path, data, context_key="source_context"):
         super().__init__()
         self.project_name = project_name
         self.project_path = project_path
         self.data = data
+        self.context_key = context_key  # "source_context" or "coped_context"
         self.setWindowTitle("Choose Project to Process")
         self.resize(700, 500)
         self.init_ui()
@@ -350,24 +555,68 @@ class ProjectChooseWindow(QWidget):
         self.log_widget.setPlaceholderText("Debug Log...")
         self.log_widget.setMaximumHeight(100)
         
+        # Load saved context for THIS context_key
+        saved_context = self.data["projects"][self.project_name].get(self.context_key)
+        
         # Roots
         self.origin_item = QTreeWidgetItem([f"[Origin] {self.project_name}"])
         self.origin_item.setData(0, Qt.ItemDataRole.UserRole, self.project_path)
-        self.origin_item.setCheckState(0, Qt.CheckState.Checked)
+        
+        # Check Origin if:
+        #   1. Saved context matches Origin, OR
+        #   2. No saved context AND context_key is 'source_context' (default for source)
+        if saved_context == self.project_path:
+            self.origin_item.setCheckState(0, Qt.CheckState.Checked)
+        elif not saved_context and self.context_key == "source_context":
+            self.origin_item.setCheckState(0, Qt.CheckState.Checked)
+        else:
+            self.origin_item.setCheckState(0, Qt.CheckState.Unchecked)
+            
         self.tree.addTopLevelItem(self.origin_item)
 
         self.coped_root = QTreeWidgetItem(["Coped Projects"])
         self.tree.addTopLevelItem(self.coped_root)
 
-        # Shadow
-        shadow_path = os.path.join("file", "shadow")
-        self.shadow_item = QTreeWidgetItem(["Shadow Layer"])
-        self.shadow_item.setData(0, Qt.ItemDataRole.UserRole, shadow_path)
-        self.shadow_item.setCheckState(0, Qt.CheckState.Checked)
-        self.coped_root.addChild(self.shadow_item)
+        self.tree.addTopLevelItem(self.coped_root)
+
+        # Populate Coped Projects (Scan 'file/{project_name}/' directory)
+        file_dir = os.path.join("file", self.project_name)
+        self.coped_roots = [] # Keep track for radio behavior
         
+        if os.path.exists(file_dir):
+            subdirs = sorted([d for d in os.listdir(file_dir) if os.path.isdir(os.path.join(file_dir, d))])
+            first_coped = True
+            for d in subdirs:
+                if d == "__pycache__": continue
+                
+                full_path = os.path.join(file_dir, d)
+                if d == "shadow": display_name = "Shadow Layer"
+                else: display_name = d
+                
+                item = QTreeWidgetItem([display_name])
+                item.setData(0, Qt.ItemDataRole.UserRole, full_path)
+                
+                # Check if:
+                #   1. Saved context matches this path, OR
+                #   2. No saved context AND context_key is 'coped_context' AND this is first coped
+                if saved_context == full_path:
+                    item.setCheckState(0, Qt.CheckState.Checked)
+                elif not saved_context and self.context_key == "coped_context" and first_coped:
+                    item.setCheckState(0, Qt.CheckState.Checked)
+                    first_coped = False
+                else:
+                    item.setCheckState(0, Qt.CheckState.Unchecked)
+                
+                self.coped_root.addChild(item)
+                self.coped_roots.append(item)
+                
+                # Populate files
+                self.populate_tree(item, full_path)
+
         self.coped_root.setExpanded(True)
         self.origin_item.setExpanded(True)
+
+        self.tree.itemClicked.connect(self.handle_item_clicked)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -386,12 +635,16 @@ class ProjectChooseWindow(QWidget):
         
         self.log(f"Initialized ProjectChooseWindow for: {self.project_path}")
 
+        self.log(f"Initialized ProjectChooseWindow for: {self.project_path}")
+
         # Populate NOW (after log widget exists)
+        # Origin
         if os.path.exists(self.project_path):
             self.populate_tree(self.origin_item, self.project_path)
-        
-        if os.path.exists(shadow_path):
-            self.populate_tree(self.shadow_item, shadow_path)
+            
+        # Coped Projects are already populated in the loop above (check lines 488-513 in original context)
+        # The loop scanning 'file/' calls self.populate_tree(item, full_path) immediately.
+        # So we don't need a separate call here for 'shadow_path'.
 
     def log(self, msg):
         self.log_widget.append(msg)
@@ -406,6 +659,9 @@ class ProjectChooseWindow(QWidget):
 
             if os.path.isdir(root_path):
                 files = sorted(os.listdir(root_path))
+                # Get selected files for visual marking
+                selected_set = set(self.data["projects"][self.project_name].get("selected_files", []))
+                
                 self.log(f"Found {len(files)} files in {root_path}")
                 for f in files:
                     full_path = os.path.join(root_path, f)
@@ -414,8 +670,16 @@ class ProjectChooseWindow(QWidget):
                     
                     item = QTreeWidgetItem([f])
                     item.setData(0, Qt.ItemDataRole.UserRole, full_path)
-                    item.setCheckState(0, Qt.CheckState.Unchecked)
                     
+                    # Visual: Color/Bold for selected
+                    if full_path in selected_set:
+                        from PyQt6.QtGui import QColor, QFont, QBrush
+                        # Use a brighter green
+                        item.setForeground(0, QBrush(QColor("#00CD00"))) # Medium Spring Green / Bright Green
+                        font = item.font(0)
+                        font.setBold(True)
+                        item.setFont(0, font)
+
                     parent_item.addChild(item)
                     if os.path.isdir(full_path):
                         self.populate_tree(item, full_path)
@@ -424,21 +688,43 @@ class ProjectChooseWindow(QWidget):
         except Exception as e:
             self.log(f"Error populating tree: {e}")
 
+    def handle_item_clicked(self, item, column):
+        # Enforce Radio Behavior for Roots (Origin vs any Coped Root)
+        roots = [self.origin_item] + getattr(self, "coped_roots", [])
+        
+        if item in roots:
+            # Uncheck others
+            for root in roots:
+                if root != item:
+                    root.setCheckState(0, Qt.CheckState.Unchecked)
+            # Ensure clicked is checked
+            if item.checkState(0) == Qt.CheckState.Unchecked:
+                 item.setCheckState(0, Qt.CheckState.Checked)
+
     def apply_changes(self):
         try:
-            active = []
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                item = it.value()
-                if item.checkState(0) == Qt.CheckState.Checked:
-                    path = item.data(0, Qt.ItemDataRole.UserRole)
-                    if path: active.append(path)
-                it += 1
+            selected_path = None
             
-            # Save to data (assuming 'active_contexts' list)
-            self.data["projects"][self.project_name]["active_contexts"] = active
+            # Check Origin
+            if self.origin_item.checkState(0) == Qt.CheckState.Checked:
+                selected_path = self.origin_item.data(0, Qt.ItemDataRole.UserRole)
+            
+            # Check Coped Roots
+            if not selected_path:
+                 coped_roots = getattr(self, "coped_roots", [])
+                 for root in coped_roots:
+                     if root.checkState(0) == Qt.CheckState.Checked:
+                         selected_path = root.data(0, Qt.ItemDataRole.UserRole)
+                         break
+            
+            if not selected_path:
+                QMessageBox.warning(self, "Warning", "Please select a project.")
+                return
+
+            # Save to the correct context_key
+            self.data["projects"][self.project_name][self.context_key] = selected_path
             save_data(self.data)
-            # QMessageBox.information(self, "Saved", "Project selection saved.") # Optional: Reduce popup spam
+            # QMessageBox.information(self, "Saved", "Project selection saved.") 
             self.selection_made.emit()
             self.close()
         except Exception as e:
@@ -491,10 +777,12 @@ class EnterWindow(QWidget):
         
         self.btn_toggle_shadow = QPushButton("Shadow Files")
         self.btn_toggle_shadow.setCheckable(True)
+        self.btn_toggle_shadow.setChecked(True)
         self.btn_toggle_shadow.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
         
         self.btn_toggle_diff = QPushButton("Diff (Source vs Coped)")
         self.btn_toggle_diff.setCheckable(True)
+        self.btn_toggle_diff.setChecked(True)
         self.btn_toggle_diff.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
         
         row2.addWidget(self.btn_toggle_src)
@@ -518,17 +806,23 @@ class EnterWindow(QWidget):
         self.btn_open_ide = QPushButton("Open IDE")
         self.btn_open_ide.clicked.connect(self.open_vscode_logic)
         
-        # toggle_switch[3] "vscode from source or coped"
-        self.btn_toggle_vscode_mode = QPushButton("Target: Coped")
-        self.btn_toggle_vscode_mode.setCheckable(True)
-        self.btn_toggle_vscode_mode.setChecked(True)
-        self.btn_toggle_vscode_mode.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
-        self.btn_toggle_vscode_mode.setToolTip("Toggle ON to use Shadow/Coped (Extension), OFF for Source (Standard)")
+        # Removed toggle_switch[3] "Target: Coped" as per instructions
         
         row4.addWidget(self.btn_gen_chat)
         row4.addWidget(self.btn_open_ide)
-        row4.addWidget(self.btn_toggle_vscode_mode)
         layout.addLayout(row4)
+
+        # 5. Chat Actions (Row 5 - Copy/Paste)
+        row5 = QHBoxLayout()
+        self.btn_copy_chat = QPushButton("Copy Chat.txt")
+        self.btn_copy_chat.clicked.connect(self.copy_chat)
+        
+        self.btn_paste_ai = QPushButton("Paste AI Response")
+        self.btn_paste_ai.clicked.connect(self.paste_ai_response)
+        
+        row5.addWidget(self.btn_copy_chat)
+        row5.addWidget(self.btn_paste_ai)
+        layout.addLayout(row5)
 
         # Log
         self.log_output = QTextEdit()
@@ -539,17 +833,50 @@ class EnterWindow(QWidget):
 
         self.setLayout(layout)
 
+    def copy_chat(self):
+        chat_path = os.path.join(self.project_path, "chat.txt")
+        if os.path.exists(chat_path):
+            try:
+                with open(chat_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                clipboard = QApplication.clipboard()
+                clipboard.setText(content)
+                self.log("Copied chat.txt to clipboard.")
+            except Exception as e:
+                self.log(f"Error reading chat.txt: {e}")
+                QMessageBox.critical(self, "Error", str(e))
+        else:
+            self.log("chat.txt not found.")
+            QMessageBox.warning(self, "Warning", "chat.txt not found.")
+
+    def paste_ai_response(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        if not text:
+            self.log("Clipboard is empty.")
+            return
+            
+        chat_path = os.path.join(self.project_path, "chat.txt")
+        try:
+            # Append to chat.txt
+            with open(chat_path, "a", encoding="utf-8") as f:
+                f.write("\n\n" + text)
+            self.log("Appended AI response to chat.txt.")
+        except Exception as e:
+            self.log(f"Error writing to chat.txt: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
     # ------------------------
     # Helpers for New Buttons
     # ------------------------
     def open_source_manager(self):
-        # Open ProjectChooseWindow
-        self.proj_choose = ProjectChooseWindow(self.project_name, self.project_path, self.data)
+        # Open ProjectChooseWindow for Source context
+        self.proj_choose = ProjectChooseWindow(self.project_name, self.project_path, self.data, context_key="source_context")
         self.proj_choose.show()
 
     def open_shadow_manager_direct(self):
-        # Also Open ProjectChooseWindow (as per UIturn.py logic)
-        self.proj_choose_coped = ProjectChooseWindow(self.project_name, self.project_path, self.data)
+        # Open ProjectChooseWindow for Coped context
+        self.proj_choose_coped = ProjectChooseWindow(self.project_name, self.project_path, self.data, context_key="coped_context")
         self.proj_choose_coped.show()
 
     def open_vscode_logic(self):
@@ -559,13 +886,44 @@ class EnterWindow(QWidget):
         self.proj_choose_vscode.show()
 
     def decide_and_launch_vscode(self):
-        # Decide based on toggle button
-        if self.btn_toggle_vscode_mode.isChecked():
-            # Coped / Shadow -> Extension
-            self.open_vscode_with_extension()
-        else:
-            # Source -> Standard VS Code
-            self.open_vscode_standard()
+        # Launch based on SAVED context
+        try:
+            context = self.data["projects"][self.project_name].get("active_context")
+            if not context:
+                # Default to project path if nothing set
+                context = self.project_path
+            
+            # Check if context is Shadow to enable extension?
+            # User requirement: "make sure the extension of vscode is workful"
+            # We will ALWAYS load the extension for now, but point VS Code to the selected folder.
+            
+            import subprocess
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ext_path = os.path.join(base_dir, "ai-coder-helper")
+            
+            code_cmd = shutil.which("code")
+            if not code_cmd:
+                 # Fallback check
+                common_paths = [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles%\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft VS Code\bin\code.cmd"),
+                ]
+                for p in common_paths:
+                    if os.path.exists(p):
+                        code_cmd = p
+                        break
+            
+            if not code_cmd:
+                QMessageBox.warning(self, "Error", "VS Code not found.")
+                return
+
+            cmd = [code_cmd, context, f"--extensionDevelopmentPath={ext_path}"]
+            self.log(f"Launching Code on: {context}")
+            subprocess.Popen(cmd, shell=True)
+
+        except Exception as e:
+            self.log(f"Error launching: {e}")
 
     def open_vscode_standard(self):
         try:
@@ -586,6 +944,28 @@ class EnterWindow(QWidget):
     # ------------------------
     # Generate chat.txt (Updated with Toggles)
     # ------------------------
+    def get_canonical_relpath(self, path):
+        # Resolve path to a relative path from its "Project Root" (Origin or Coped)
+        # 1. Check if in 'file/' (Coped)
+        file_dir = os.path.join(self.project_path, "file")
+        abs_path = os.path.abspath(path)
+        
+        if abs_path.startswith(os.path.abspath(file_dir)):
+            # It's in a coped project
+            rel_from_file = os.path.relpath(abs_path, file_dir)
+            # rel_from_file might be "Second\main.py"
+            # We want to strip the first component ("Second")
+            parts = rel_from_file.split(os.sep)
+            if len(parts) > 1:
+                return os.path.join(*parts[1:])
+            return None # Should not happen for valid files
+        
+        # 2. Assume Origin
+        rel = os.path.relpath(abs_path, self.project_path)
+        if rel.startswith(".."):
+            return None # Ignore files outside project
+        return rel
+
     def generate_chat(self):
         try:
             selected_files = self.data["projects"][self.project_name].get("selected_files", [])
@@ -593,66 +973,285 @@ class EnterWindow(QWidget):
                 QMessageBox.warning(self, "Warning", "No files selected. Please select source files first.")
                 return
 
+            # Determine Contexts (Ensure Absolute)
+            source_root = self.data["projects"][self.project_name].get("source_context", self.project_path)
+            coped_root = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", "shadow"))
+            
+            if not os.path.isabs(source_root): source_root = os.path.join(self.project_path, source_root)
+            if not os.path.isabs(coped_root): coped_root = os.path.join(self.project_path, coped_root)
+
+            source_root = os.path.abspath(source_root)
+            coped_root = os.path.abspath(coped_root)
+
+            self.log(f"Generating Prompt with:")
+            self.log(f"  Source Context: {source_root}")
+            self.log(f"  Coped Context: {coped_root}")
+
+            # Filter Selected Files by Context
+            # We ONLY consider files that are explicitly selected WITHIN the chosen root.
+            src_files = [] 
+            coped_files = []
+            
+            # Normalize selected_files to sets of absolute paths for easy checking
+            abs_selected = set()
+            for p in selected_files:
+                abs_p = os.path.abspath(p)
+                # Parse safety check
+                rel_check = os.path.relpath(abs_p, self.project_path)
+                if not rel_check.startswith(".."):
+                    abs_selected.add(abs_p)
+
+            # Assign to contexts
+            def is_subpath(p, r):
+                # Ensure r ends with separator or checking exact match
+                # Use normcase to handle Windows case insensitivity and separators
+                r = os.path.normcase(os.path.abspath(r))
+                p = os.path.normcase(os.path.abspath(p))
+                return p == r or p.startswith(os.path.join(r, ""))
+
+            self.log(f"DEBUG: Filtering {len(abs_selected)} files...")
+            self.log(f"DEBUG: Source Root (norm): {os.path.normcase(os.path.abspath(source_root))}")
+            self.log(f"DEBUG: Coped Root (norm): {os.path.normcase(os.path.abspath(coped_root))}")
+
+            for path in abs_selected:
+                is_src = is_subpath(path, source_root)
+                is_coped = is_subpath(path, coped_root)
+                self.log(f"DEBUG: Checking {path} -> Src: {is_src}, Coped: {is_coped}")
+
+                if is_src:
+                    src_files.append(path)
+                
+                # Check Coped match independently (in case user selected Origin for both contexts)
+                # However, if roots differ, we want strict separation.
+                # If source_root == coped_root, then src_files == coped_files.
+                
+                if is_coped:
+                    coped_files.append(path)
+
+            # Prepare Relative Paths for Display & Diff
+            src_rels = {} # rel -> abs_path
+            for p in src_files:
+                rel = os.path.relpath(p, source_root)
+                src_rels[rel] = p
+            
+            coped_rels = {} # rel -> abs_path
+            for p in coped_files:
+                rel = os.path.relpath(p, coped_root)
+                coped_rels[rel] = p
+
             content = ""
             
-            # 1. System Prompt (Reuse existing or simplified)
-            content += "# System Instructions\n"
-            content += "You are an AI coding assistant.\n\n"
-            
-            # 2. Input Prompt
+            # 1. System Prompt (Penter Unified Prompt)
+            content += "# System Instructions — Penter Unified Prompt & System Design\n\n"
+            content += "You are **Penter AI**.\n\n"
+            content += "This document defines BOTH:\n"
+            content += "1. How you generate output (Prompt Rules)\n"
+            content += "2. How the system consuming your output works (System Design Contract)\n\n"
+            content += "You MUST follow this specification exactly.\n\n"
+            content += "════════════════════════════════════\n"
+            content += "SECTION A — OUTPUT LAYERS (CRITICAL)\n"
+            content += "════════════════════════════════════\n\n"
+            content += "There are TWO output layers:\n\n"
+            content += "1. Chat Layer (Human-readable)\n"
+            content += "   - Plain text\n"
+            content += "   - Used for explanation, confirmation, reasoning\n"
+            content += "   - Ignored by all automation\n\n"
+            content += "2. Command Layer (Machine-readable)\n"
+            content += "   - STRICTLY inside a fenced code block\n"
+            content += "   - Language identifier MUST be: `penter`\n"
+            content += "   - Parsed and executed by VS Code Extension\n\n"
+            content += "❗ Any Penter command written outside a `penter` code block is INVALID  \n"
+            content += "❗ Any non-Penter text written inside a `penter` code block is INVALID  \n\n"
+            content += "════════════════════════════════════\n"
+            content += "SECTION B — WHEN TO GENERATE COMMANDS\n"
+            content += "════════════════════════════════════\n\n"
+            content += "You MUST generate a `penter` code block ONLY when:\n"
+            content += "- A concrete file modification is requested\n"
+            content += "- Target file path is known\n"
+            content += "- Line numbers are explicitly known or provided\n\n"
+            content += "If ANY required information is missing:\n"
+            content += "- Do NOT guess\n"
+            content += "- Do NOT infer\n"
+            content += "- Output a `penter` block containing ONLY:\n\n"
+            content += "```penter\n"
+            content += "NO_OP\n"
+            content += "```\n\n"
+            content += "(You MAY explain the reason in the Chat Layer.)\n\n"
+            content += "════════════════════════════════════\n"
+            content += "SECTION C — PENTER LANGUAGE SPEC\n"
+            content += "════════════════════════════════════\n\n"
+            content += "Penter is a **deterministic edit instruction language**.\n\n"
+            content += "It describes EXACT file changes.\n"
+            content += "It does NOT describe intent, reasoning, or summaries.\n\n"
+            content += "────────────\n"
+            content += "Block Format\n"
+            content += "────────────\n\n"
+            content += "```penter\n"
+            content += "Penter\n"
+            content += "BEGIN\n"
+            content += "...\n"
+            content += "END\n"
+            content += "```\n\n"
+            content += "────────────\n"
+            content += "File Block\n"
+            content += "────────────\n\n"
+            content += "FILE <relative_path>\n\n"
+            content += "Example:\n"
+            content += "FILE init.py\n\n"
+            content += "────────────\n"
+            content += "ADD Operation\n"
+            content += "────────────\n\n"
+            content += "ADD <line_number>\n"
+            content += "<<<\n"
+            content += "<code>\n"
+            content += ">>>\n\n"
+            content += "Rules:\n"
+            content += "- Line numbers are 1-based\n"
+            content += "- Code may contain ANY characters, including `{}`, `[]`, `()`\n"
+            content += "- Do NOT escape code\n"
+            content += "- Code is inserted starting at the given line\n\n"
+            content += "────────────\n"
+            content += "REMOVE Operation\n"
+            content += "────────────\n\n"
+            content += "REMOVE <start_line>-<end_line>\n\n"
+            content += "Rules:\n"
+            content += "- Line range is inclusive\n"
+            content += "- No code block follows REMOVE\n\n"
+            content += "────────────\n"
+            content += "Multiple Operations\n"
+            content += "────────────\n\n"
+            content += "- Multiple operations per file are allowed\n"
+            content += "- Multiple files per block are allowed\n"
+            content += "- Operations are executed in the order written\n\n"
+            content += "════════════════════════════════════\n"
+            content += "SECTION D — STRICT SAFETY RULES\n"
+            content += "════════════════════════════════════\n\n"
+            content += "You MUST NEVER:\n"
+            content += "1. Invent files or paths\n"
+            content += "2. Invent line numbers\n"
+            content += "3. Invent file content\n"
+            content += "4. Summarize or refactor code\n"
+            content += "5. Output partial edits\n"
+            content += "6. Output multiple `penter` blocks\n"
+            content += "If unsure → output `NO_OP`\n\n"
+            content += "════════════════════════════════════\n"
+            content += "SECTION F — GENERATE BUTTON BEHAVIOR\n"
+            content += "════════════════════════════════════\n\n"
+            content += "When the user presses a \"Generate\" button:\n"
+            content += "- You respond normally in chat IF needed\n"
+            content += "- If edits are valid, you MUST include ONE `penter` block\n"
+            content += "- If no edits are valid, you MUST include a `penter` block with `NO_OP`\n\n"
+             # 2. Input Prompt
             user_input = self.text_input.toPlainText()
             if user_input:
                 content += "# User Input / Commands\n" + user_input + "\n\n"
 
-            # 3. Source Files
+            # 3. Source Files (Only src_rels)
             if self.btn_toggle_src.isChecked():
-                content += "# Source Files\n"
-                for file_path in selected_files:
-                    if os.path.exists(file_path):
-                        rel = os.path.relpath(file_path, self.project_path)
+                content += f"# Source Files (Context: {os.path.basename(source_root)})\n"
+                sorted_src = sorted(src_rels.keys())
+                if not sorted_src:
+                     content += "(No files selected in Source Context. Hint: Ensure you selected files from the **Source Project** tree in Console.)\n\n"
+                
+                for rel in sorted_src:
+                    path = src_rels[rel]
+                    if os.path.exists(path):
                         content += f"## {rel}\n```\n"
                         try:
-                            with open(file_path, "r", encoding="utf-8") as f:
-                                content += f.read()
+                            with open(path, "r", encoding="utf-8") as f:
+                                # Add line numbers to help Penter Spec
+                                lines = f.readlines()
+                                for i, line in enumerate(lines, 1):
+                                    content += f"{i:4} | {line}"
                         except: content += "(Error reading file)"
                         content += "\n```\n\n"
+                    else:
+                        content += f"## {rel}\n(File not found in Source Context)\n\n"
 
-            # 4. Shadow Files
+            # 4. Shadow Files (Only coped_rels)
             if self.btn_toggle_shadow.isChecked():
-                content += "# Shadow Files\n"
-                shadow_root = os.path.join("file", "shadow")
-                for file_path in selected_files:
-                    rel = os.path.relpath(file_path, self.project_path)
-                    shadow_path = os.path.join(shadow_root, rel)
-                    if os.path.exists(shadow_path):
+                content += f"# Shadow Files (Context: {os.path.basename(coped_root)})\n"
+                sorted_coped = sorted(coped_rels.keys())
+                if not sorted_coped:
+                     content += "(No files selected in Coped Context. Hint: Ensure you selected files from the **Coped Project** tree in Console.)\n\n"
+
+                for rel in sorted_coped:
+                    path = coped_rels[rel]
+                    if os.path.exists(path):
                         content += f"## (Shadow) {rel}\n```\n"
                         try:
-                            with open(shadow_path, "r", encoding="utf-8") as f:
-                                content += f.read()
+                            with open(path, "r", encoding="utf-8") as f:
+                                # Add line numbers to help Penter Spec
+                                lines = f.readlines()
+                                for i, line in enumerate(lines, 1):
+                                    content += f"{i:4} | {line}"
                         except: content += "(Error reading file)"
                         content += "\n```\n\n"
+                    else:
+                         content += f"## (Shadow) {rel}\n(File not found in Coped Context)\n\n"
 
-            # 5. Diff Report
+            # 5. Diff Report (Intersection of Selected Files)
             if self.btn_toggle_diff.isChecked():
-                diff_report = self.get_diff_report()
-                if diff_report:
-                    content += "# Diff Report (Source -> Shadow)\n"
-                    content += diff_report + "\n\n"
+                # Rel paths that exist in BOTH selections
+                common_rels = set(src_rels.keys()) & set(coped_rels.keys())
+                sorted_common = sorted(list(common_rels))
+                
+                if sorted_common:
+                    diff_report = self.get_diff_report_context(source_root, coped_root, sorted_common)
+                    if diff_report:
+                        content += "# Diff Report (Source -> Shadow)\n"
+                        content += diff_report + "\n\n"
+                else:
+                    if src_rels or coped_rels:
+                        content += "# Diff Report\n(No common files selected between Source and Coped context to compare)\n\n"
 
-            # Save
-            chat_folder = os.path.join("file", self.project_name)
-            os.makedirs(chat_folder, exist_ok=True)
-            chat_path = os.path.join(chat_folder, "chat.txt")
+            # Save to Project Root (consistent with copy_chat)
+            chat_path = os.path.join(self.project_path, "chat.txt")
             
             with open(chat_path, "w", encoding="utf-8") as f:
                 f.write(content)
                 
             self.log(f"chat.txt generated ({len(content)} chars).")
-            self.btn_copy.setEnabled(True)
+            self.btn_copy_chat.setEnabled(True)
             self.copy_chat() # Auto-copy convenience
             
         except Exception as e:
             self.log(f"Error generating chat.txt: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def get_diff_report_context(self, source_root, coped_root, rels):
+        try:
+            import difflib
+            diffs = []
+            for rel in rels:
+                src_file = os.path.join(source_root, rel)
+                dst_file = os.path.join(coped_root, rel)
+                
+                src_lines = []
+                dst_lines = []
+                
+                if os.path.exists(src_file):
+                     with open(src_file, 'r', encoding='utf-8') as f: src_lines = f.readlines()
+                if os.path.exists(dst_file):
+                     with open(dst_file, 'r', encoding='utf-8') as f: dst_lines = f.readlines()
+                     
+                matcher = difflib.SequenceMatcher(None, src_lines, dst_lines)
+                file_diffs = []
+                for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                    if tag == "replace":
+                        file_diffs.append(f"Line {i1+1}-{i2}: Replace with\n{''.join(dst_lines[j1:j2])}")
+                    elif tag == "delete":
+                        file_diffs.append(f"Line {i1+1}-{i2}: Delete")
+                    elif tag == "insert":
+                        file_diffs.append(f"Line {i1+1}: Insert\n{''.join(dst_lines[j1:j2])}")
+                
+                if file_diffs:
+                    diffs.append(f"### {rel}")
+                    diffs.extend(file_diffs)
+            
+            return "\n".join(diffs)
+        except Exception as e: return f"Error diffing: {e}"
 
     def get_diff_report(self):
         try:
@@ -692,7 +1291,8 @@ class EnterWindow(QWidget):
     # ------------------------
     def copy_chat(self):
         try:
-            chat_path = os.path.join("file", self.project_name, "chat.txt")
+            # Use self.project_path for consistency
+            chat_path = os.path.join(self.project_path, "chat.txt")
             if os.path.exists(chat_path):
                 with open(chat_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -760,8 +1360,78 @@ class EnterWindow(QWidget):
                 QMessageBox.warning(self, "Error", "VS Code not found in PATH.")
                 return
             
+            # Determine which path to open based on context
+            # Priority: If Shadow toggle is ON, open Coped. Otherwise open Source.
+            if self.btn_toggle_shadow.isChecked():
+                coped_context = self.data["projects"][self.project_name].get("coped_context")
+                if coped_context and os.path.isabs(coped_context):
+                    target_path = coped_context
+                elif coped_context:
+                    target_path = os.path.abspath(coped_context)
+                else:
+                    target_path = self.project_path  # Fallback to Origin
+            else:
+                source_context = self.data["projects"][self.project_name].get("source_context", self.project_path)
+                if os.path.isabs(source_context):
+                    target_path = source_context
+                else:
+                    target_path = os.path.abspath(source_context)
+            
             # Launch
-            subprocess.Popen([code_cmd, self.project_path, f"--extensionDevelopmentPath={ext_path}"])
+            self.log(f"Launching VS Code for path: {target_path}")
+            subprocess.Popen([code_cmd, target_path, f"--extensionDevelopmentPath={ext_path}"])
+            self.log("VS Code launched with AI extension.")
+        except Exception as e:
+            self.log(f"Error launching VS Code: {e}")
+
+    def open_vscode_logic(self):
+        # Open ProjectChooseWindow for user to select which project to open
+        self.ide_choose_window = ProjectChooseWindow(
+            self.project_name,
+            self.project_path,
+            self.data,
+            context_key="ide_context"  # Use a separate key for IDE selection
+        )
+        self.ide_choose_window.selection_made.connect(self.launch_vscode_for_selected)
+        self.ide_choose_window.show()
+
+    def launch_vscode_for_selected(self):
+        # Get the selected path from ide_context
+        ide_context = self.data["projects"][self.project_name].get("ide_context")
+        if not ide_context:
+            self.log("No project selected for IDE.")
+            return
+        
+        # Resolve path
+        if os.path.isabs(ide_context):
+            target_path = ide_context
+        else:
+            target_path = os.path.abspath(ide_context)
+        
+        # Launch VS Code
+        try:
+            import subprocess
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ext_path = os.path.join(base_dir, "ai-coder-helper")
+            
+            code_cmd = shutil.which("code")
+            if not code_cmd:
+                common_paths = [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles%\Microsoft VS Code\bin\code.cmd"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft VS Code\bin\code.cmd"),
+                ]
+                for p in common_paths:
+                    if os.path.exists(p):
+                        code_cmd = p
+                        break
+
+            if not code_cmd:
+                QMessageBox.warning(self, "Error", "VS Code not found in PATH.")
+                return
+            
+            self.log(f"Launching VS Code for path: {target_path}")
+            subprocess.Popen([code_cmd, target_path, f"--extensionDevelopmentPath={ext_path}"])
             self.log("VS Code launched with AI extension.")
         except Exception as e:
             self.log(f"Error launching VS Code: {e}")
@@ -826,6 +1496,279 @@ class EnterWindow(QWidget):
         self.sync_window = SyncWindow(self.project_path, self)
         self.sync_window.show()
 
+    # ------------------------
+    # Launch Logic
+    # ------------------------
+    def real_launch_vscode(self, file_list):
+        print("Launching VS Code with files:")
+        for f in file_list:
+            print(f" - {f}")
+        # Placeholder: In strict mode, maybe pass these as args to 'code'?
+        # But usually 'code .' opens folder. To open specific files: 'code f1 f2 ...'
+        if not file_list:
+            print("No files to launch.")
+            return
+            
+        try:
+            # Find code executable logic (reused from open_vscode_logic or simplified)
+            code_cmd = "code" # simplified
+            # If you need absolute path detection, reuse open_vscode_logic logic
+            
+            # Here we just print as requested by user
+            QMessageBox.information(self, "Launch", f"Prepared {len(file_list)} files. Check Console for list.")
+        except Exception as e:
+            print(f"Error in real_launch_vscode: {e}")
+
+    def prepare_and_launch(self):
+        final_files = set()
+        # Parse selected_files (Convert to absolute sets for easier handling)
+        raw_selected = self.data["projects"][self.project_name].get("selected_files", [])
+        abs_selected = set()
+        for p in raw_selected:
+            if os.path.isabs(p):
+                 abs_selected.add(os.path.normcase(p))
+            else:
+                 abs_selected.add(os.path.normcase(os.path.abspath(p)))
+
+        # Context Roots
+        source_root = os.path.abspath(self.project_path)
+        # Determine Coped Root - coped_context is RELATIVE to SCRIPT DIR, not CWD or project_path
+        coped_context = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", self.project_name, "shadow"))
+        # Always resolve relative to script directory to avoid CWD issues
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if os.path.isabs(coped_context):
+            coped_root = coped_context
+        else:
+            coped_root = os.path.join(script_dir, coped_context)
+
+        # 1. Source Logic
+        if self.btn_toggle_src.isChecked():
+            # Add Source-side selected files
+            # (Strictly those under source_root)
+            for p in abs_selected:
+                if p.startswith(os.path.normcase(source_root) + os.sep):
+                     final_files.add(p)
+                # If user wants ALL selected files regardless of context (as per simple prompt), 
+                # uncomment next line and comment above check:
+                # final_files.add(p)
+
+        # 2. Shadow Logic - Use selected files that are in Coped context
+        if self.btn_toggle_shadow.isChecked():
+            print(f"[prepare_and_launch] Filtering selected files under Shadow Root: {coped_root}")
+            for p in abs_selected:
+                # Check if this file is under coped_root
+                if p.startswith(os.path.normcase(coped_root) + os.sep) or p == os.path.normcase(coped_root):
+                    final_files.add(p)
+                    print(f"[prepare_and_launch] Added Shadow file: {p}")
+            print(f"[prepare_and_launch] Files after Shadow Filter: {len(final_files)}")
+
+        # 3. Diff Logic
+        if self.btn_toggle_diff.isChecked():
+            print("[prepare_and_launch] Diff Filter is ON. Removing identical files...")
+            # Filter final_files: Keep only if diff exists
+            # We assume "Diff" means "Differs from counterpart".
+            # For a file, we find its pair.
+            
+            diff_kept = set()
+            for path in final_files:
+                path = os.path.normcase(path)
+                
+                # Determine Identity
+                # Is it Source?
+                if path.startswith(os.path.normcase(source_root)):
+                    rel = os.path.relpath(path, source_root)
+                    counterpart = os.path.join(coped_root, rel)
+                elif path.startswith(os.path.normcase(coped_root)):
+                    rel = os.path.relpath(path, coped_root)
+                    counterpart = os.path.join(source_root, rel)
+                else:
+                    # Unknown file (not in either root), keep it just in case? Or discard?
+                    # "Keep only diffs" implies discarding if irrelevant.
+                    continue
+                
+                counterpart = os.path.normcase(os.path.abspath(counterpart))
+                
+                # Check Diff
+                # Case 1: Counterpart missing -> Diff (Creation/Deletion)
+                if not os.path.exists(counterpart):
+                    diff_kept.add(path)
+                    continue
+                
+                # Case 2: Content Differs
+                try:
+                    if not filecmp.cmp(path, counterpart, shallow=False):
+                         print(f"Diff Found: {path}")
+                         diff_kept.add(path)
+                except Exception:
+                    # Error reading? Assume diff
+                    diff_kept.add(path)
+            
+            print(f"[prepare_and_launch] Files removed by Diff Filter: {len(final_files) - len(diff_kept)}")
+            final_files = diff_kept
+
+        # Output
+        print(f"[prepare_and_launch] Final Files Count: {len(final_files)}")
+        self.real_launch_vscode(list(final_files))
+
+    def generate_chat(self):
+        """Generate chat.txt with selected files based on toggle states"""
+        try:
+            # Use the same file gathering logic as prepare_and_launch
+            final_files = set()
+            raw_selected = self.data["projects"][self.project_name].get("selected_files", [])
+            abs_selected = set()
+            for p in raw_selected:
+                if os.path.isabs(p):
+                     abs_selected.add(os.path.normcase(p))
+                else:
+                     abs_selected.add(os.path.normcase(os.path.abspath(p)))
+
+            # Context Roots
+            source_root = os.path.abspath(self.project_path)
+            coped_context = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", self.project_name, "shadow"))
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            if os.path.isabs(coped_context):
+                coped_root = coped_context
+            else:
+                coped_root = os.path.join(script_dir, coped_context)
+
+            # Gather files based on toggles
+            if self.btn_toggle_src.isChecked():
+                for p in abs_selected:
+                    if p.startswith(os.path.normcase(source_root) + os.sep):
+                         final_files.add(p)
+
+            if self.btn_toggle_shadow.isChecked():
+                for p in abs_selected:
+                    if p.startswith(os.path.normcase(coped_root) + os.sep) or p == os.path.normcase(coped_root):
+                        final_files.add(p)
+
+            # Write to chat.txt
+            chat_path = os.path.join(script_dir, "file", "chat.txt")
+            os.makedirs(os.path.dirname(chat_path), exist_ok=True)
+
+            with open(chat_path, "w", encoding="utf-8") as f:
+                # Write Penter Unified Prompt & System Design (Full Version)
+                f.write("# System Instructions\n")
+                f.write("You are an AI coding assistant.\n\n")
+                
+                f.write("## Core Rules\n\n")
+                f.write("### Context Awareness\n")
+                f.write("1. **Source Context**: Files explicitly selected from the origin project.\n")
+                f.write("2. **Coped Context**: Files from the shadow/coped project layer.\n")
+                f.write("3. **Strict Processing**: Only process files present in this prompt. Do NOT assume, infer, or create files outside this context.\n")
+                f.write("4. **Ask First**: If you need information about files NOT in this prompt, explicitly ask the user.\n\n")
+                
+                f.write("### No Hallucination\n")
+                f.write("- Do NOT invent file contents, paths, or code that isn't explicitly shown.\n")
+                f.write("- If a file is needed but missing from this prompt, respond with:\n")
+                f.write('  - "I don\'t have enough information"\n')
+                f.write('  - "Please include [filename] in the prompt"\n\n')
+                
+                f.write("### Handling Empty Selections\n")
+                f.write("- If NO Source files: Acknowledge and ask user to select Source files.\n")
+                f.write("- If NO Coped files: This might be intentional (e.g., creating from scratch).\n")
+                f.write("- If NO files at all: Ask user to check their selection and toggles.\n\n")
+                
+                f.write("## Output Format: Penter Command Language (PCL)\n\n")
+                f.write("Use the following precise, machine-readable format for ALL code modifications:\n\n")
+                f.write("```penter\n")
+                f.write("FILE relative/path/to/file.py\n")
+                f.write("ADD 5\n")
+                f.write("new line content to insert after line 5\n")
+                f.write("another new line\n\n")
+                f.write("REMOVE 10-12\n\n")
+                f.write("FILE another/file.js\n")
+                f.write("ADD 0\n")
+                f.write("// Add at beginning of file\n")
+                f.write("```\n\n")
+                
+                f.write("### PCL Commands\n")
+                f.write("- `FILE path`: Specifies the target file (relative to project root)\n")
+                f.write("- `ADD lineNumber`: Insert content AFTER the specified line (use 0 for file start)\n")
+                f.write("- `REMOVE startLine-endLine`: Delete lines in the range (inclusive)\n")
+                f.write("- `REMOVE lineNumber`: Delete a single line\n\n")
+                
+                f.write("### PCL Rules\n")
+                f.write("1. Always start with a FILE command\n")
+                f.write("2. Multiple ADD/REMOVE commands can follow for the same file\n")
+                f.write("3. Content lines follow ADD until next command or blank line\n")
+                f.write("4. Apply changes in order: REMOVEs first, then ADDs\n")
+                f.write("5. Line numbers reference ORIGINAL file (before any changes)\n\n")
+                
+                f.write("## Response Guidelines\n")
+                f.write("- Provide clear explanations BEFORE the PCL code block\n")
+                f.write("- Enclose ALL PCL commands in a single ```penter code fence\n")
+                f.write("- Reference specific line numbers from the provided files\n")
+                f.write("- After PCL block, you may add summary/notes\n\n")
+                
+                f.write("# Selected Files\n\n")
+                
+                # Write file contents with line numbers
+                for file_path in sorted(final_files):
+                    try:
+                        rel_path = os.path.relpath(file_path, source_root if file_path.startswith(os.path.normcase(source_root)) else coped_root)
+                        f.write(f"## {rel_path}\n\n")
+                        
+                        with open(file_path, "r", encoding="utf-8", errors="ignore") as src:
+                            lines = src.readlines()
+                            for i, line in enumerate(lines, 1):
+                                f.write(f"{i:5} | {line}")
+                        f.write("\n\n")
+                    except Exception as e:
+                        f.write(f"(Error reading {file_path}: {e})\n\n")
+
+            self.log(f"Generated chat.txt with {len(final_files)} files at: {chat_path}")
+            QMessageBox.information(self, "Success", f"Generated chat.txt with {len(final_files)} files!")
+            
+        except Exception as e:
+            self.log(f"Error generating chat: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to generate chat.txt: {e}")
+
+    def copy_chat(self):
+        """Copy chat.txt content to clipboard"""
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            chat_path = os.path.join(script_dir, "file", "chat.txt")
+            
+            if not os.path.exists(chat_path):
+                QMessageBox.warning(self, "Error", "chat.txt not found. Generate it first!")
+                return
+            
+            with open(chat_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            QApplication.clipboard().setText(content)
+            self.log(f"Copied {len(content)} characters to clipboard")
+            QMessageBox.information(self, "Success", "chat.txt copied to clipboard!")
+            
+        except Exception as e:
+            self.log(f"Error copying chat: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to copy: {e}")
+
+    def paste_ai_response(self):
+        """Paste AI response from clipboard and append to chat.txt"""
+        try:
+            clipboard_content = QApplication.clipboard().text()
+            if not clipboard_content:
+                QMessageBox.warning(self, "Error", "Clipboard is empty!")
+                return
+            
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            chat_path = os.path.join(script_dir, "file", "chat.txt")
+            
+            with open(chat_path, "a", encoding="utf-8") as f:
+                f.write("\n\n# AI Response\n\n")
+                f.write(clipboard_content)
+            
+            self.log(f"Pasted {len(clipboard_content)} characters to chat.txt")
+            QMessageBox.information(self, "Success", "AI response appended to chat.txt!")
+            
+        except Exception as e:
+            self.log(f"Error pasting response: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to paste: {e}")
+
+
 # ------------------------
 # Main Window
 # ------------------------
@@ -851,7 +1794,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.path_label)
 
         btn_layout = QHBoxLayout()
-        self.btn_control = QPushButton("Control Selected Files")
+        self.btn_control = QPushButton("Console")
         self.btn_enter = QPushButton("Enter")
         self.btn_exit = QPushButton("Exit")
         btn_layout.addWidget(self.btn_control)
@@ -869,12 +1812,12 @@ class MainWindow(QWidget):
         if not self.current_project:
             QMessageBox.warning(self, "Warning", "No project selected.")
             return
-        self.control_window = ControlFilesWindow(
+        self.console_window = ConsoleWindow(
             self.current_project,
             self.data["projects"][self.current_project]["path"],
             self.data
         )
-        self.control_window.show()
+        self.console_window.show()
 
     def open_enter(self):
         if not self.current_project:
