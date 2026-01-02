@@ -59,14 +59,15 @@ export class ChangeApplier {
         // We parse the block line by line to maintain state
         const lines = blockContent.split(/\r?\n/);
 
+        // State
         let currentFile: string | null = null;
-        let fileLines: string[] = []; // The content of the current file being edited
+        let fileLines: string[] = [];
         let isReadingCode = false;
+        let isImplicitCode = false; // New flag for code blocks without <<< >>>
         let codeBuffer: string[] = [];
         let insertLine = -1;
 
         // Map to store Final Content for each file
-        // RelativePath -> Content string
         const modifiedFiles = new Map<string, string>();
 
         for (let i = 0; i < lines.length; i++) {
@@ -74,29 +75,52 @@ export class ChangeApplier {
             const trimmed = line.trim();
 
             if (trimmed === 'Penter' || trimmed === 'BEGIN' || trimmed === 'END') {
+                // If we are in implicit mode, these keywords end the block
+                if (isImplicitCode) {
+                    isReadingCode = false;
+                    isImplicitCode = false;
+                    if (currentFile && insertLine !== -1) { // ADD
+                        this.executeAdd(fileLines, insertLine, codeBuffer);
+                    } else if (currentFile && insertLine === 0) { // CREATE
+                        // For CREATE in implicit mode, codeBuffer IS the content
+                        // handled when we eventually save currentFile
+                        // actually CREATE sets fileLines=[] and insertLine=0
+                        // so executeAdd works for valid fileLines.
+                        // But for CREATE, fileLines is empty.
+                        this.executeAdd(fileLines, insertLine, codeBuffer);
+                    }
+                    codeBuffer = [];
+                }
                 continue;
             }
 
             // READING CODE BLOCK logic
             if (isReadingCode) {
-                if (trimmed === '>>>') {
-                    // End of code block, Execute ADD
+                if (!isImplicitCode && trimmed === '>>>') {
+                    // explicit end
                     isReadingCode = false;
                     this.executeAdd(fileLines, insertLine, codeBuffer);
                     codeBuffer = [];
-                } else {
-                    codeBuffer.push(line); // Keep original indentation
+                    continue;
+                } else if (isImplicitCode) {
+                    // Check if this line looks like a command
+                    if (/^(FILE|ADD|REMOVE|CREATE|DELETE|RENAME|MKDIR|RMDIR)\s+/.test(trimmed)) {
+                        // End implicit block and Reprocess this line
+                        isReadingCode = false;
+                        isImplicitCode = false;
+                        this.executeAdd(fileLines, insertLine, codeBuffer);
+                        codeBuffer = [];
+                        i--; // Go back to process this command line
+                        continue;
+                    }
                 }
+
+                codeBuffer.push(line);
                 continue;
             }
 
             // COMMAND PARSING
             if (trimmed.startsWith('FILE ')) {
-                // If we were processing a file, save it (Wait, we process sequentially in memory?)
-                // Actually, if we switch files, we must have finished the previous one.
-                // Or does the spec allow interleaving? "Multiple operations per file". "Multiple files per block".
-                // Usually implies FILE A ... ops ... FILE B ... ops.
-
                 // Save previous file if exists
                 if (currentFile) {
                     modifiedFiles.set(currentFile, fileLines.join('\n'));
@@ -107,38 +131,54 @@ export class ChangeApplier {
 
                 // Load existing content
                 if (fs.existsSync(currentFile)) {
-                    // If we ALREADY modified it in this block (interleaved?), load from map.
                     if (modifiedFiles.has(currentFile)) {
                         fileLines = modifiedFiles.get(currentFile)!.split('\n');
                     } else {
                         fileLines = fs.readFileSync(currentFile, 'utf8').split(/\r?\n/);
                     }
                 } else {
-                    // Create new empty file
                     fileLines = [];
                 }
             }
             else if (trimmed.startsWith('ADD ')) {
                 if (!currentFile) continue;
-                // Parse line number
                 const parts = trimmed.split(' ');
                 insertLine = parseInt(parts[1]);
 
-                // Expect next line to be <<<
-                // But loop handles it. Just set state.
-                // However, check next line immediately?
+                // Check for explicit block start
                 if (i + 1 < lines.length && lines[i + 1].trim() === '<<<') {
                     isReadingCode = true;
+                    isImplicitCode = false;
                     i++; // Skip <<< line
+                } else {
+                    // Implicit block start
+                    isReadingCode = true;
+                    isImplicitCode = true;
+                }
+            }
+            else if (trimmed.startsWith('ADD_AFTER ')) {
+                if (!currentFile) continue;
+                const parts = trimmed.split(' ');
+                // ADD_AFTER 1 means we append AFTER line 1.
+                // This effectively means we behave like ADD 2.
+                // So we just increment the parsed line number by 1.
+                insertLine = parseInt(parts[1]) + 1;
+
+                // Reuse ADD logic for parsing block
+                if (i + 1 < lines.length && lines[i + 1].trim() === '<<<') {
+                    isReadingCode = true;
+                    isImplicitCode = false;
+                    i++;
+                } else {
+                    isReadingCode = true;
+                    isImplicitCode = true;
                 }
             }
             else if (trimmed.startsWith('REMOVE ')) {
                 if (!currentFile) continue;
                 const parts = trimmed.split(' ');
-                // Format: REMOVE 125-129 or REMOVE 125
                 const rangeStr = parts[1];
                 let start = 0, end = 0;
-
                 if (rangeStr.includes('-')) {
                     const rangeParts = rangeStr.split('-');
                     start = parseInt(rangeParts[0]);
@@ -147,25 +187,29 @@ export class ChangeApplier {
                     start = parseInt(rangeStr);
                     end = start;
                 }
-
                 this.executeRemove(fileLines, start, end);
             }
             else if (trimmed.startsWith('CREATE ')) {
-                // CREATE path - Create new file with following content
                 const relPath = trimmed.substring(7).trim();
                 const filePath = this.resolveFilePath(relPath, workspaceRoot);
 
-                // Expect content to follow (same as ADD with <<<>>>)
                 if (i + 1 < lines.length && lines[i + 1].trim() === '<<<') {
                     isReadingCode = true;
+                    isImplicitCode = false;
                     currentFile = filePath;
-                    fileLines = []; // Start with empty file
-                    insertLine = 0; // Insert at beginning
-                    i++; // Skip <<<
+                    fileLines = [];
+                    insertLine = 0;
+                    i++;
+                } else {
+                    // Implicit CREATE?
+                    isReadingCode = true;
+                    isImplicitCode = true;
+                    currentFile = filePath;
+                    fileLines = [];
+                    insertLine = 0;
                 }
             }
             else if (trimmed.startsWith('DELETE ')) {
-                // DELETE path - Mark file for deletion
                 const relPath = trimmed.substring(7).trim();
                 const filePath = this.resolveFilePath(relPath, workspaceRoot);
                 changes.push({
@@ -175,12 +219,10 @@ export class ChangeApplier {
                 });
             }
             else if (trimmed.startsWith('RENAME ')) {
-                // RENAME oldPath newPath
                 const parts = trimmed.substring(7).trim().split(/\s+/);
                 if (parts.length >= 2) {
                     const oldPath = this.resolveFilePath(parts[0], workspaceRoot);
                     const newPath = this.resolveFilePath(parts[1], workspaceRoot);
-                    // For rename, we read old file and write to new location, then delete old
                     if (fs.existsSync(oldPath)) {
                         const content = fs.readFileSync(oldPath, 'utf8');
                         changes.push({
@@ -197,10 +239,8 @@ export class ChangeApplier {
                 }
             }
             else if (trimmed.startsWith('MKDIR ')) {
-                // MKDIR path - Create directory (handle in applyChanges)
                 const relPath = trimmed.substring(6).trim();
                 const dirPath = this.resolveFilePath(relPath, workspaceRoot);
-                // Use a special action for directory creation
                 changes.push({
                     filePath: dirPath,
                     content: '__MKDIR__',
@@ -208,7 +248,6 @@ export class ChangeApplier {
                 });
             }
             else if (trimmed.startsWith('RMDIR ')) {
-                // RMDIR path - Remove directory
                 const relPath = trimmed.substring(6).trim();
                 const dirPath = this.resolveFilePath(relPath, workspaceRoot);
                 changes.push({
@@ -217,6 +256,11 @@ export class ChangeApplier {
                     action: 'delete'
                 });
             }
+        }
+
+        // Finish any open implicit block at end of file
+        if (isReadingCode && isImplicitCode) {
+            this.executeAdd(fileLines, insertLine, codeBuffer);
         }
 
         // Save last file
@@ -240,8 +284,17 @@ export class ChangeApplier {
         // Line is 1-based.
         // Index is line-1.
         let index = line - 1;
-        if (index < 0) index = 0;
-        if (index > fileLines.length) index = fileLines.length;
+
+        console.log(`[ExecuteAdd] Request Line: ${line}, Parsed Index: ${index}, FileLength: ${fileLines.length}`);
+
+        if (index < 0) {
+            console.log(`[ExecuteAdd] Index ${index} clamped to 0`);
+            index = 0;
+        }
+        if (index > fileLines.length) {
+            console.log(`[ExecuteAdd] Index ${index} clamped to ${fileLines.length} (Appended)`);
+            index = fileLines.length;
+        }
 
         // Insert codeLines at index
         // splice(start, deleteCount, ...items)
@@ -281,9 +334,10 @@ export class ChangeApplier {
     }
 
     /**
-     * Apply parsed changes to files
+     * Apply parsed changes to files using WorkspaceEdit
      */
     async applyChanges(changes: FileChange[]): Promise<void> {
+        const workspaceEdit = new vscode.WorkspaceEdit();
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
         const logPath = path.join(workspaceRoot, 'log.txt');
         const logEntries: string[] = [];
@@ -291,33 +345,94 @@ export class ChangeApplier {
 
         for (const change of changes) {
             try {
-                const dir = path.dirname(change.filePath);
+                const uri = vscode.Uri.file(change.filePath);
 
-                // Ensure directory exists
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
+                if (change.action === 'create' || change.action === 'modify') {
+                    if (change.content === '__MKDIR__') {
+                        // WorkspaceEdit doesn't explicitly foster directories, ignoring
+                        // But we can ensure it exists?
+                        if (!fs.existsSync(change.filePath)) {
+                            fs.mkdirSync(change.filePath, { recursive: true });
+                        }
+                        continue;
+                    }
+
+                    // For modify/create, we can use textual edits or full replacement.
+                    // Since we reconstructed the FULL file content in memory (fileLines),
+                    // we can just replace the entire file.
+
+                    // But to replace, we need the Range of the entire file.
+                    // Or we can use createFile with overwrite?
+                    // "createFile" has options: { overwrite: true, ignoreIfExists: false }
+
+                    // Checking if file exists to decide logic
+                    // Actually, WorkspaceEdit.createFile will throw if exists and overwrite is false.
+                    // WorkspaceEdit.replace needs a valid range.
+
+                    // Simple approach: Delete and Create? (Too destructive?)
+                    // Better approach: Calculate full range if exists.
+
+                    if (fs.existsSync(change.filePath) && change.action === 'modify') {
+                        // Read current file to get range? 
+                        // Actually, we can just replace assuming 0 to infinity?
+                        // We need a proper range. 
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        const fullRange = new vscode.Range(
+                            doc.positionAt(0),
+                            doc.positionAt(doc.getText().length)
+                        );
+                        workspaceEdit.replace(uri, fullRange, change.content);
+                        logEntries.push(`[${timestamp}] MODIFIED (Edit): ${change.filePath}`);
+                    } else {
+                        // File doesn't exist, or it's a "Create" action (which implies new?)
+                        // We used 'modify' for everything in parseChanges.
+                        // So if fs.exists, replace. If not, create.
+
+                        // Ensure directory exists (fs operation needed as WorkspaceEdit might not create parents?)
+                        // Actually WorkspaceEdit createFile usually handles it, but let's be safe.
+                        const dir = path.dirname(change.filePath);
+                        if (!fs.existsSync(dir)) {
+                            fs.mkdirSync(dir, { recursive: true });
+                        }
+
+                        workspaceEdit.createFile(uri, { overwrite: true });
+                        // Insert content into the new file
+                        // createFile creates empty. We need to insert.
+                        workspaceEdit.insert(uri, new vscode.Position(0, 0), change.content);
+                        logEntries.push(`[${timestamp}] CREATED: ${change.filePath}`);
+                    }
+
+                } else if (change.action === 'delete') {
+                    if (change.content === '__RMDIR__') {
+                        // Delete directory (recursive)
+                        // WorkspaceEdit.deleteFile doesn't do recursive dir delete easily?
+                        // Use fs for directories?
+                        // VSCode API: workspaceEdit.deleteFile(uri, { recursive: true })
+                        workspaceEdit.deleteFile(uri, { recursive: true, ignoreIfNotExists: true });
+                    } else {
+                        workspaceEdit.deleteFile(uri, { ignoreIfNotExists: true });
+                    }
+                    logEntries.push(`[${timestamp}] DELETED: ${change.filePath}`);
                 }
-
-                // Write content
-                fs.writeFileSync(change.filePath, change.content, 'utf8');
-
-                const action = 'MODIFIED'; // Since we reconstruct full file, mostly modify/create
-                logEntries.push(`[${timestamp}] ${action}: ${change.filePath}`);
-
-                // Open the file in editor
-                const doc = await vscode.workspace.openTextDocument(change.filePath);
-                await vscode.window.showTextDocument(doc, { preview: false });
 
             } catch (error) {
                 logEntries.push(`[${timestamp}] ERROR: ${change.filePath} - ${error}`);
-                vscode.window.showErrorMessage(`Failed to apply change to ${change.filePath}: ${error}`);
+                vscode.window.showErrorMessage(`Failed to stage change for ${change.filePath}: ${error}`);
             }
+        }
+
+        // Apply all edits
+        const applied = await vscode.workspace.applyEdit(workspaceEdit);
+
+        if (applied) {
+            vscode.window.showInformationMessage(`Changes applied (Unsaved). Please Save to Accept, or Undo to Reject.`);
+        } else {
+            vscode.window.showErrorMessage(`Failed to apply changes via WorkspaceEdit.`);
         }
 
         // Write to log file
         if (logEntries.length > 0) {
             const logContent = logEntries.join('\n') + '\n';
-
             if (fs.existsSync(logPath)) {
                 fs.appendFileSync(logPath, logContent);
             } else {

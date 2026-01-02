@@ -15,6 +15,22 @@ export class ChatGenerator {
         content += '# Task Description\n\n';
         content += taskDescription + '\n\n';
 
+        // Penter Instructions (Injected)
+        content += '# Output Format (IMPORTANT)\n';
+        content += 'Please provide the solution in the following "Penter" format:\n';
+        content += '```penter\n';
+        content += 'FILE path/to/file\n';
+        content += 'ADD <line_number>\n';
+        content += 'code_to_insert_BEFORE_this_line\n';
+        content += 'ADD_AFTER <line_number>\n';
+        content += 'code_to_insert_AFTER_this_line\n';
+        content += 'REMOVE <start_line>-<end_line>\n';
+        content += '```\n';
+        content += '**Rules:**\n';
+        content += '- Use `ADD n` to insert code **BEFORE** line `n` (existing line `n` moves down).\n';
+        content += '- Use `ADD_AFTER n` to insert code **AFTER** line `n`.\n';
+        content += '- Use plain text for code blocks (no need for extra delimiters).\n\n';
+
         // Section 2: Project Structure
         content += '# Project Structure\n\n';
         content += '```\n';

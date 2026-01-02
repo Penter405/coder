@@ -129,11 +129,7 @@ export function activate(context: vscode.ExtensionContext) {
             const outputFile = config.get<string>('outputFile', 'chat.txt');
             if (vscode.workspace.workspaceFolders) {
                 const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const chatPath = path.join(workspaceRoot, outputFile); // Or file/chat.txt? Main app saves to file/chat.txt
-                // Wait, Main App saves to "file/chat.txt" relative to script dir.
-                // Assuming workspaceRoot is the same as script dir.
-                // Let's check "file/chat.txt" first, then "chat.txt".
-
+                // Check "file/chat.txt" (standard location) and configured output file
                 const pathsToCheck = [
                     path.join(workspaceRoot, 'file', 'chat.txt'),
                     path.join(workspaceRoot, outputFile)
@@ -165,32 +161,26 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             try {
-                // Apply to Shadow Layer
+                // Apply DIRECTLY to Workspace
                 if (!vscode.workspace.workspaceFolders) return;
                 const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const shadowRoot = path.join(root, 'file', 'shadow');
-
-                // Ensure shadow dir exists
-                if (!fs.existsSync(shadowRoot)) {
-                    fs.mkdirSync(shadowRoot, { recursive: true });
-                }
-
-                // Parse changes applying to Shadow Root
-                const changes = changeApplier.parseChanges(penterContent, shadowRoot);
+                
+                // Parse changes applying to Workspace Root
+                const changes = changeApplier.parseChanges(penterContent, root);
 
                 if (changes.length === 0) {
                     vscode.window.showWarningMessage(`No valid Penter commands found in ${source}.`);
                     return;
                 }
 
-                const confirmApply = await vscode.window.showQuickPick(['Review in Shadow Layer', 'Cancel'], {
-                    placeHolder: `Found ${changes.length} changes in ${source}. Proceed to Review?`
-                });
+                const confirmApply = await vscode.window.showInformationMessage(
+                    `Found ${changes.length} changes in ${source}. Apply to workspace?`,
+                    'Yes', 'No'
+                );
 
-                if (confirmApply === 'Review in Shadow Layer') {
+                if (confirmApply === 'Yes') {
                     await changeApplier.applyChanges(changes);
-                    vscode.window.showInformationMessage(`Proposed changes saved to Shadow Layer. Please review in the sidebar.`);
-                    vscode.commands.executeCommand('aiCoderShadow.focus'); // Focus view
+                    vscode.window.showInformationMessage(`Changes applied to workspace.`);
                 }
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to process changes: ${error}`);

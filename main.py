@@ -1042,109 +1042,31 @@ class EnterWindow(QWidget):
             content = ""
             
             # 1. System Prompt (Penter Unified Prompt)
-            content += "# System Instructions — Penter Unified Prompt & System Design\n\n"
-            content += "You are **Penter AI**.\n\n"
-            content += "This document defines BOTH:\n"
-            content += "1. How you generate output (Prompt Rules)\n"
-            content += "2. How the system consuming your output works (System Design Contract)\n\n"
-            content += "You MUST follow this specification exactly.\n\n"
-            content += "════════════════════════════════════\n"
-            content += "SECTION A — OUTPUT LAYERS (CRITICAL)\n"
-            content += "════════════════════════════════════\n\n"
-            content += "There are TWO output layers:\n\n"
-            content += "1. Chat Layer (Human-readable)\n"
-            content += "   - Plain text\n"
-            content += "   - Used for explanation, confirmation, reasoning\n"
-            content += "   - Ignored by all automation\n\n"
-            content += "2. Command Layer (Machine-readable)\n"
-            content += "   - STRICTLY inside a fenced code block\n"
-            content += "   - Language identifier MUST be: `penter`\n"
-            content += "   - Parsed and executed by VS Code Extension\n\n"
-            content += "❗ Any Penter command written outside a `penter` code block is INVALID  \n"
-            content += "❗ Any non-Penter text written inside a `penter` code block is INVALID  \n\n"
-            content += "════════════════════════════════════\n"
-            content += "SECTION B — WHEN TO GENERATE COMMANDS\n"
-            content += "════════════════════════════════════\n\n"
-            content += "You MUST generate a `penter` code block ONLY when:\n"
-            content += "- A concrete file modification is requested\n"
-            content += "- Target file path is known\n"
-            content += "- Line numbers are explicitly known or provided\n\n"
-            content += "If ANY required information is missing:\n"
-            content += "- Do NOT guess\n"
-            content += "- Do NOT infer\n"
-            content += "- Output a `penter` block containing ONLY:\n\n"
-            content += "```penter\n"
-            content += "NO_OP\n"
-            content += "```\n\n"
-            content += "(You MAY explain the reason in the Chat Layer.)\n\n"
-            content += "════════════════════════════════════\n"
-            content += "SECTION C — PENTER LANGUAGE SPEC\n"
-            content += "════════════════════════════════════\n\n"
-            content += "Penter is a **deterministic edit instruction language**.\n\n"
-            content += "It describes EXACT file changes.\n"
-            content += "It does NOT describe intent, reasoning, or summaries.\n\n"
-            content += "────────────\n"
-            content += "Block Format\n"
-            content += "────────────\n\n"
-            content += "```penter\n"
-            content += "Penter\n"
-            content += "BEGIN\n"
-            content += "...\n"
-            content += "END\n"
-            content += "```\n\n"
-            content += "────────────\n"
-            content += "File Block\n"
-            content += "────────────\n\n"
-            content += "FILE <relative_path>\n\n"
-            content += "Example:\n"
-            content += "FILE init.py\n\n"
-            content += "────────────\n"
-            content += "ADD Operation\n"
-            content += "────────────\n\n"
-            content += "ADD <line_number>\n"
-            content += "<<<\n"
-            content += "<code>\n"
-            content += ">>>\n\n"
-            content += "Rules:\n"
-            content += "- Line numbers are 1-based\n"
-            content += "- Code may contain ANY characters, including `{}`, `[]`, `()`\n"
-            content += "- Do NOT escape code\n"
-            content += "- Code is inserted starting at the given line\n\n"
-            content += "────────────\n"
-            content += "REMOVE Operation\n"
-            content += "────────────\n\n"
-            content += "REMOVE <start_line>-<end_line>\n\n"
-            content += "Rules:\n"
-            content += "- Line range is inclusive\n"
-            content += "- No code block follows REMOVE\n\n"
-            content += "────────────\n"
-            content += "Multiple Operations\n"
-            content += "────────────\n\n"
-            content += "- Multiple operations per file are allowed\n"
-            content += "- Multiple files per block are allowed\n"
-            content += "- Operations are executed in the order written\n\n"
-            content += "════════════════════════════════════\n"
-            content += "SECTION D — STRICT SAFETY RULES\n"
-            content += "════════════════════════════════════\n\n"
-            content += "You MUST NEVER:\n"
-            content += "1. Invent files or paths\n"
-            content += "2. Invent line numbers\n"
-            content += "3. Invent file content\n"
-            content += "4. Summarize or refactor code\n"
-            content += "5. Output partial edits\n"
-            content += "6. Output multiple `penter` blocks\n"
-            content += "If unsure → output `NO_OP`\n\n"
-            content += "════════════════════════════════════\n"
-            content += "SECTION F — GENERATE BUTTON BEHAVIOR\n"
-            content += "════════════════════════════════════\n\n"
-            content += "When the user presses a \"Generate\" button:\n"
-            content += "- You respond normally in chat IF needed\n"
-            content += "- If edits are valid, you MUST include ONE `penter` block\n"
-            content += "- If no edits are valid, you MUST include a `penter` block with `NO_OP`\n\n"
+            # 1. System Prompt
+            self.log("DEBUG: Starting generate_chat...")
+            prompt_file = os.path.join("file", "prompt.txt")
+            if os.path.exists(prompt_file):
+                try:
+                    with open(prompt_file, "r", encoding="utf-8") as f:
+                        prompt_text = f.read()
+                        content += prompt_text
+                        self.log(f"DEBUG: Loaded prompt.txt ({len(prompt_text)} chars)")
+                except Exception as e:
+                     content += f"// Error reading prompt.txt: {e}\n\n"
+                     self.log(f"DEBUG: Error reading prompt.txt: {e}")
+            else:
+                 self.log("DEBUG: prompt.txt NOT found. Using fallback.")
+                 content += "// Warning: prompt.txt not found.\n"
+                 content += "You are Penter AI.\n\n"
+
              # 2. Input Prompt
             user_input = self.text_input.toPlainText()
+            self.log(f"DEBUG: captured user_input ({len(user_input)} chars): {user_input[:20]}...")
+            
             if user_input:
-                content += "# User Input / Commands\n" + user_input + "\n\n"
+                content += "# Task Description\n" + user_input + "\n\n"
+            else:
+                self.log("DEBUG: User input is empty/None")
 
             # 3. Source Files (Only src_rels)
             if self.btn_toggle_src.isChecked():
@@ -1660,66 +1582,28 @@ class EnterWindow(QWidget):
             os.makedirs(os.path.dirname(chat_path), exist_ok=True)
 
             with open(chat_path, "w", encoding="utf-8") as f:
-                # Write Penter Unified Prompt & System Design (Full Version)
-                f.write("# System Instructions\n")
-                f.write("You are an AI coding assistant.\n\n")
+                # Write Penter Unified Prompt from file
+                self.log("DEBUG: Reading prompt.txt...")
+                prompt_file = os.path.join("file", "prompt.txt")
+                if os.path.exists(prompt_file):
+                    try:
+                        with open(prompt_file, "r", encoding="utf-8") as pf:
+                            f.write(pf.read())
+                    except Exception as e:
+                        f.write(f"// Error reading prompt.txt: {e}\n\n")
+                else:
+                    f.write("# System Instructions\n(prompt.txt not found - fallback)\n\n")
                 
-                f.write("## Core Rules\n\n")
-                f.write("### Context Awareness\n")
-                f.write("1. **Source Context**: Files explicitly selected from the origin project.\n")
-                f.write("2. **Coped Context**: Files from the shadow/coped project layer.\n")
-                f.write("3. **Strict Processing**: Only process files present in this prompt. Do NOT assume, infer, or create files outside this context.\n")
-                f.write("4. **Ask First**: If you need information about files NOT in this prompt, explicitly ask the user.\n\n")
-                
-                f.write("### No Hallucination\n")
-                f.write("- Do NOT invent file contents, paths, or code that isn't explicitly shown.\n")
-                f.write("- If a file is needed but missing from this prompt, respond with:\n")
-                f.write('  - "I don\'t have enough information"\n')
-                f.write('  - "Please include [filename] in the prompt"\n\n')
-                
-                f.write("### Handling Empty Selections\n")
-                f.write("- If NO Source files: Acknowledge and ask user to select Source files.\n")
-                f.write("- If NO Coped files: This might be intentional (e.g., creating from scratch).\n")
-                f.write("- If NO files at all: Ask user to check their selection and toggles.\n\n")
-                
-                f.write("## Output Format: Penter Command Language (PCL)\n\n")
-                f.write("Use the following precise, machine-readable format for ALL code modifications:\n\n")
-                f.write("```penter\n")
-                f.write("FILE relative/path/to/file.py\n")
-                f.write("ADD 5\n")
-                f.write("new line content to insert after line 5\n")
-                f.write("another new line\n\n")
-                f.write("REMOVE 10-12\n\n")
-                f.write("FILE another/file.js\n")
-                f.write("ADD 0\n")
-                f.write("// Add at beginning of file\n")
-                f.write("```\n\n")
-                
-                f.write("### PCL Commands\n")
-                f.write("**File Operations:**\n")
-                f.write("- `FILE path`: Specifies the target file (relative to project root)\n")
-                f.write("- `ADD lineNumber`: Insert content AFTER the specified line (use 0 for file start)\n")
-                f.write("- `REMOVE startLine-endLine`: Delete lines in the range (inclusive)\n")
-                f.write("- `REMOVE lineNumber`: Delete a single line\n")
-                f.write("\n**File/Folder Management:**\n")
-                f.write("- `CREATE path`: Create a new file (content follows until next command)\n")
-                f.write("- `DELETE path`: Delete a file\n")
-                f.write("- `RENAME oldPath newPath`: Rename or move a file\n")
-                f.write("- `MKDIR path`: Create a directory\n")
-                f.write("- `RMDIR path`: Remove an empty directory\n\n")
-                
-                f.write("### PCL Rules\n")
-                f.write("1. Always start with a FILE command\n")
-                f.write("2. Multiple ADD/REMOVE commands can follow for the same file\n")
-                f.write("3. Content lines follow ADD until next command or blank line\n")
-                f.write("4. Apply changes in order: REMOVEs first, then ADDs\n")
-                f.write("5. Line numbers reference ORIGINAL file (before any changes)\n\n")
-                
-                f.write("## Response Guidelines\n")
-                f.write("- Provide clear explanations BEFORE the PCL code block\n")
-                f.write("- Enclose ALL PCL commands in a single ```penter code fence\n")
-                f.write("- Reference specific line numbers from the provided files\n")
-                f.write("- After PCL block, you may add summary/notes\n\n")
+                # Append Task Description from User Input
+                # Note: self.text_input is expected to exist if this is EnterWindow
+                if hasattr(self, 'text_input'):
+                    user_input = self.text_input.toPlainText()
+                    self.log(f"DEBUG: captured user_input from text_input ({len(user_input)} chars)")
+                    if user_input:
+                        f.write("\n# Task Description\n")
+                        f.write(user_input + "\n\n")
+                else:
+                    self.log("DEBUG: text_input widget not found in this window context.")
                 
                 # Check if Diff toggle is ON
                 show_diff = self.btn_toggle_diff.isChecked()
