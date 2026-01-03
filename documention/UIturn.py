@@ -170,3 +170,10 @@ if isuseable(project_choose_window):
         project_choose_window.close()
 if isuseable(vs_code):
     print("the extension is in ai-code-helper of this coder project")#extension that we made could be not work well.
+    """
+    get origin project:from data.json
+    get shadow:know origin project name, enter <pwd of Coder>//file//<origin project name>//shadow
+    get copde:know origin project name, enter <pwd of Coder>//file//<origin project name>//<coped project name>
+    <pwd of Coder>. not <pwd of opend project>
+    """
+

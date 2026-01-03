@@ -99,15 +99,20 @@ class ConsoleWindow(QWidget):
         if not os.path.exists(file_dir):
             os.makedirs(file_dir)
             
+        # Ensure 'shadow' folder exists
+        shadow_path = os.path.join(file_dir, "shadow")
+        if not os.path.exists(shadow_path):
+            os.makedirs(shadow_path)
+            
         subdirs = sorted([d for d in os.listdir(file_dir) if os.path.isdir(os.path.join(file_dir, d))])
         
         for d in subdirs:
             if d == "__pycache__": continue
+            if d.lower() == "shadow": continue # Hide Shadow Layer from UI
             
             full_path = os.path.join(file_dir, d)
             # Display name
-            if d == "shadow": display_name = "[Coped] Shadow Layer"
-            else: display_name = f"[Coped] {d}"
+            display_name = f"[Coped] {d}"
             
             coped_root = QTreeWidgetItem([display_name])
             coped_root.setData(0, Qt.ItemDataRole.UserRole, full_path)
@@ -233,6 +238,16 @@ class ConsoleWindow(QWidget):
             if not safe_name:
                 QMessageBox.warning(self, "Error", "Invalid project name.")
                 return
+
+            # Validation 1: "shadow" is reserved
+            if safe_name.lower() == "shadow":
+                 QMessageBox.critical(self, "Error", "Name 'shadow' is reserved by System.")
+                 return
+            
+            # Validation 2: Cannot be same as Origin Project
+            if safe_name.lower() == self.project_name.lower():
+                 QMessageBox.critical(self, "Error", f"Name '{safe_name}' is already used by the Origin Project.")
+                 return
             
             # New Logic: Create in file/{project_name}/
             base_dir = os.path.join("file", self.project_name)
@@ -581,6 +596,14 @@ class ProjectChooseWindow(QWidget):
 
         # Populate Coped Projects (Scan 'file/{project_name}/' directory)
         file_dir = os.path.join("file", self.project_name)
+        if not os.path.exists(file_dir):
+            os.makedirs(file_dir)
+            
+        # Ensure 'shadow' folder exists
+        shadow_path = os.path.join(file_dir, "shadow")
+        if not os.path.exists(shadow_path):
+            os.makedirs(shadow_path)
+            
         self.coped_roots = [] # Keep track for radio behavior
         
         if os.path.exists(file_dir):
@@ -588,10 +611,10 @@ class ProjectChooseWindow(QWidget):
             first_coped = True
             for d in subdirs:
                 if d == "__pycache__": continue
+                if d.lower() == "shadow": continue # Hide Shadow Layer from UI
                 
                 full_path = os.path.join(file_dir, d)
-                if d == "shadow": display_name = "Shadow Layer"
-                else: display_name = d
+                display_name = d
                 
                 item = QTreeWidgetItem([display_name])
                 item.setData(0, Qt.ItemDataRole.UserRole, full_path)
@@ -628,6 +651,7 @@ class ProjectChooseWindow(QWidget):
 
         self.btn_apply.clicked.connect(self.apply_changes)
         self.btn_cancel.clicked.connect(self.close)
+
 
         # Add Log Widget to Layout
         layout.addWidget(self.log_widget)
@@ -729,6 +753,8 @@ class ProjectChooseWindow(QWidget):
             self.close()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
+
+
 
 # ------------------------
 # Enter Window

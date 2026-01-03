@@ -68,7 +68,8 @@ class ShadowTreeProvider {
         // Watch for changes in shadow folder
         if (vscode.workspace.workspaceFolders) {
             const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            const shadowPattern = new vscode.RelativePattern(root, 'file/shadow/**/*');
+            // Watch recursively under file/ for any shadow folder
+            const shadowPattern = new vscode.RelativePattern(root, 'file/**/shadow/**/*');
             const watcher = vscode.workspace.createFileSystemWatcher(shadowPattern);
             watcher.onDidChange(() => this.refresh());
             watcher.onDidCreate(() => this.refresh());
@@ -90,7 +91,50 @@ class ShadowTreeProvider {
         }
         const items = [];
         const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const shadowRoot = path.join(root, 'file', 'shadow');
+        // Determine Project Name from data.json to find specific shadow folder
+        let projectName = "";
+        let shadowRoot;
+        try {
+            // Helper to search up for file/data.json
+            const findDataJson = (startPath) => {
+                let current = startPath;
+                const rootAnchor = path.parse(startPath).root;
+                while (current !== rootAnchor) {
+                    let candidate = path.join(current, 'file', 'data.json');
+                    if (fs.existsSync(candidate))
+                        return candidate;
+                    candidate = path.join(current, 'data.json'); // Backup check
+                    current = path.dirname(current);
+                    if (current === path.dirname(current))
+                        break;
+                }
+                return null;
+            };
+            const dataPath = findDataJson(root);
+            if (dataPath && fs.existsSync(dataPath)) {
+                const dataContent = fs.readFileSync(dataPath, 'utf8');
+                const data = JSON.parse(dataContent);
+                if (data.current_project) {
+                    projectName = data.current_project;
+                }
+                // Fix: Anchor shadowRoot to App Root
+                const appRoot = path.dirname(path.dirname(dataPath));
+                if (projectName) {
+                    // Overwrite standard logic with absolute app root path
+                    shadowRoot = path.join(appRoot, 'file', projectName, 'shadow');
+                }
+            }
+        }
+        catch (e) {
+            console.error(e);
+        }
+        if (!projectName || !shadowRoot) {
+            return [];
+        }
+        // We already set shadowRoot above correctly if data.json was found.
+        // If not found, fall back to workspace relative (legacy behavior or empty)
+        if (!shadowRoot)
+            shadowRoot = path.join(root, 'file', projectName, 'shadow');
         if (!fs.existsSync(shadowRoot)) {
             return [];
         }
@@ -138,6 +182,41 @@ class ShadowTreeProvider {
             vscode.window.showInformationMessage(`Discarded shadow copy of ${item.relativePath}`);
             this.refresh();
         }
+    }
+    async mergeAll() {
+        // Iterate all items and merge
+        const items = await this.getChildren();
+        if (items.length === 0) {
+            vscode.window.showInformationMessage("No shadow files to merge.");
+            return;
+        }
+        let mergedCount = 0;
+        for (const item of items) {
+            if (fs.existsSync(item.shadowFilePath)) {
+                // Ensure target dir exists
+                const targetDir = path.dirname(item.realFilePath);
+                if (!fs.existsSync(targetDir)) {
+                    fs.mkdirSync(targetDir, { recursive: true });
+                }
+                // Copy Content
+                const content = fs.readFileSync(item.shadowFilePath, 'utf8');
+                // Handling Deletes: Check for marker?
+                // In extension.ts we wrote __DELETED__ for deletes.
+                if (content === "__DELETED__") {
+                    if (fs.existsSync(item.realFilePath)) {
+                        fs.unlinkSync(item.realFilePath);
+                    }
+                }
+                else {
+                    fs.writeFileSync(item.realFilePath, content, 'utf8');
+                }
+                // Remove shadow file
+                fs.unlinkSync(item.shadowFilePath);
+                mergedCount++;
+            }
+        }
+        vscode.window.showInformationMessage(`Merged ${mergedCount} files from Shadow Layer.`);
+        this.refresh();
     }
 }
 exports.ShadowTreeProvider = ShadowTreeProvider;

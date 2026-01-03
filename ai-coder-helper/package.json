@@ -55,6 +55,26 @@
         "command": "aiCoder.discardShadow",
         "title": "Discard",
         "icon": "$(trash)"
+      },
+      {
+        "command": "aiCoder.testShadow",
+        "title": "Test (Run Shadow)",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "aiCoder.applyAllAndRun",
+        "title": "Apply All & Run",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "aiCoder.runOriginal",
+        "title": "Run Original",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aiCoder.localPR",
+        "title": "Local PR (Merge to Project)",
+        "icon": "$(git-merge)"
       }
     ],
     "viewsContainers": {
@@ -98,23 +118,43 @@
           "command": "aiCoder.applyChanges",
           "when": "view == aiCoderFiles",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiCoder.applyAllAndRun",
+          "when": "view == aiCoderShadow",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiCoder.runOriginal",
+          "when": "view == aiCoderShadow",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiCoder.localPR",
+          "when": "view == aiCoderShadow",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
+          "command": "aiCoder.testShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "inline@1"
+        },
+        {
           "command": "aiCoder.diffShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "aiCoder.mergeShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",
-          "group": "inline"
+          "group": "inline@3"
         },
         {
           "command": "aiCoder.discardShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",
-          "group": "inline"
+          "group": "inline@4"
         }
       ],
       "editor/title": [

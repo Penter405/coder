@@ -247,7 +247,7 @@ You MUST NEVER:
 6. Output multiple `penter` blocks
 7. Use ABSOLUTE paths (e.g. `C:\...` or `/home/...`).
 8. Use `../` to navigate up. ALWAYS use paths relative to the Project Root.
-If unsure → output `NO_OP`
+If unsure → output `NO_OP` and ask user details.
 
 ════════════════════════════════════
 SECTION E — GENERATE BUTTON BEHAVIOR
