@@ -979,8 +979,19 @@ class EnterWindow(QWidget):
             raw_source_context = self.data["projects"][self.project_name].get("source_context")
             raw_coped_context = self.data["projects"][self.project_name].get("coped_context")
             
-            source_explicitly_set = raw_source_context is not None and raw_source_context != "" and raw_source_context != self.project_path
+            # Normalize for comparison
+            p_path_norm = os.path.normcase(os.path.abspath(self.project_path))
+            raw_src_norm = os.path.normcase(os.path.abspath(raw_source_context)) if raw_source_context else None
+            raw_coped_norm = os.path.normcase(os.path.abspath(raw_coped_context)) if raw_coped_context else None
+            
+            # source/coped_is_origin: True if explicitly set to project path (or Source default)
+            source_is_origin = raw_source_context is None or raw_source_context == "" or raw_src_norm == p_path_norm
+            coped_is_origin = raw_coped_norm == p_path_norm
+            
             coped_explicitly_set = raw_coped_context is not None and raw_coped_context != ""
+            
+            # self.log(f"DEBUG: Raw Source: '{raw_source_context}', Is Origin: {source_is_origin}")
+            # self.log(f"DEBUG: Raw Coped: '{raw_coped_context}', Is Origin: {coped_is_origin}, Explicit: {coped_explicitly_set}")
             
             source_root = raw_source_context if raw_source_context else self.project_path
             coped_root = raw_coped_context if raw_coped_context else os.path.join("file", "shadow")
@@ -1077,13 +1088,12 @@ class EnterWindow(QWidget):
                      content += f"// Error reading prompt.txt: {e}\n\n"
                      self.log(f"DEBUG: Error reading prompt.txt: {e}")
             else:
-                 self.log("DEBUG: prompt.txt NOT found. Using fallback.")
+                 # self.log("DEBUG: prompt.txt NOT found. Using fallback.")
                  content += "// Warning: prompt.txt not found.\n"
                  content += "You are Penter AI.\n\n"
 
              # 2. Input Prompt
             user_input = self.text_input.toPlainText()
-            self.log(f"DEBUG: captured user_input ({len(user_input)} chars): {user_input[:20]}...")
             
             # Resolve Source/Coped Project Names
             source_name = "[Not Selected]"
@@ -1095,35 +1105,27 @@ class EnterWindow(QWidget):
                 script_dir = os.path.dirname(os.path.abspath(__file__))
                 file_dir_norm = os.path.normcase(os.path.join(script_dir, "file"))
                 
-                self.log(f"DEBUG: find_project_by_path checking '{target}'")
-                
                 # Priority 1: Check Database for EXACT match (Handles nested projects)
                 for name, info in self.data.get("projects", {}).items():
                     p_path = info.get("path")
                     if p_path:
                         norm_p = os.path.normcase(os.path.abspath(p_path))
                         if norm_p == target:
-                            self.log(f"DEBUG: Found exact DB match: {name}")
                             return name
 
                 # Priority 2: Check against Current Project (Root)
                 if target == curr_proj_path_norm:
-                     self.log("DEBUG: Exact match found (Current Project)")
                      return self.project_name
                 
-                # Priority 3: Coped Folder (path is under file/<project>/<coped_name>)
-                # Example: file\order\two_none -> extract "two_none"
-                # file_dir_norm is already defined at start of function
+                # Priority 3: Coped Folder
                 if target.startswith(file_dir_norm + os.sep):
                     rel_to_file = os.path.relpath(target, file_dir_norm)
                     parts = rel_to_file.split(os.sep)
                     if len(parts) >= 2:
-                        # parts[0] = origin project name (e.g., "order"), parts[1] = coped folder name
                         coped_folder_name = parts[1]
                         self.log(f"DEBUG: Coped folder name extracted: {coped_folder_name}")
                         return coped_folder_name
                     elif len(parts) == 1:
-                        # Just the folder name directly
                         self.log(f"DEBUG: Direct folder name: {parts[0]}")
                         return parts[0]
                 
@@ -1134,8 +1136,10 @@ class EnterWindow(QWidget):
 
                 return None
 
-            # Only resolve names if contexts are explicitly set
-            if source_explicitly_set:
+            # Resolve names based on context selection
+            if source_is_origin:
+                source_name = self.project_name
+            else:
                 found_src = find_project_by_path(source_root)
                 if found_src: source_name = found_src
 
@@ -1152,8 +1156,12 @@ class EnterWindow(QWidget):
             show_shadow = self.btn_toggle_shadow.isChecked()
             show_diff = self.btn_toggle_diff.isChecked()
             
+            # Determine ACTIVE names based on toggles (UI Logic)
+            active_source_name = source_name if (show_source or show_diff) else "[Disabled]"
+            active_coped_name = coped_name if (show_shadow or show_diff) else "[Disabled]"
+            
             self.log(f"DEBUG: Toggles - Source: {show_source}, Shadow: {show_shadow}, Diff: {show_diff}")
-            self.log(f"DEBUG: Names - Current: {self.project_name}, Source: {source_name}, Coped: {coped_name}")
+            self.log(f"DEBUG: Active Names - Current: {self.project_name}, Source: {active_source_name}, Coped: {active_coped_name}")
 
             if show_diff:
                 content += f"Source Project: {source_name}\n"
