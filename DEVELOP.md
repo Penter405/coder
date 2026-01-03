@@ -152,3 +152,33 @@ python init.py
 - Python 3.x
 - pyperclip (剪貼簿，可選): `pip install pyperclip`
 - Node.js (Extension 編譯用)
+
+---
+
+## Penter Syntax Spec
+
+The AI Coder Helper uses the "Penter" format to apply changes.
+
+### Block Format
+```penter
+Penter
+BEGIN
+CMD <args>...
+END
+```
+
+### Commands
+
+| Command | Syntax | Description |
+| :--- | :--- | :--- |
+| **FILE** | `FILE <path>` | Sets the current context to `<path>`. REQUIRED before editing. |
+| **ADD** | `ADD <line>` | Inserts code **BEFORE** `<line>`. The existing line shifts down. |
+| **ADD_AFTER** | `ADD_AFTER <line>` | Inserts code **AFTER** `<line>`. Useful for appending. |
+| **REMOVE** | `REMOVE <start>-<end>` | Removes lines from `<start>` to `<end>` (inclusive). |
+| **Code Block** | `<<<` ... `>>>` | Encloses the code content for `ADD`/`ADD_AFTER`/`CREATE`. |
+| **CREATE** | `CREATE <path>` | Creates a new file. Follow by code block for content. |
+| **DELETE** | `DELETE <path>` | Deletes a file. |
+| **RENAME** | `RENAME <old> <new>` | Renames a file. |
+| **MKDIR** | `MKDIR <path>` | Creates a directory (recursive). |
+| **RMDIR** | `RMDIR <path>` | Removes a directory (recursive). |
+

@@ -969,16 +969,36 @@ class EnterWindow(QWidget):
     def generate_chat(self):
         try:
             selected_files = self.data["projects"][self.project_name].get("selected_files", [])
-            if not selected_files:
-                QMessageBox.warning(self, "Warning", "No files selected. Please select source files first.")
-                return
+            # Permissive: Allow generation even if no files are selected
+            # if not selected_files:
+            #     QMessageBox.warning(self, "Warning", "No files selected. Please select source files first.")
+            #     return
 
             # Determine Contexts (Ensure Absolute)
-            source_root = self.data["projects"][self.project_name].get("source_context", self.project_path)
-            coped_root = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", "shadow"))
+            # Track if contexts are explicitly set vs using defaults
+            raw_source_context = self.data["projects"][self.project_name].get("source_context")
+            raw_coped_context = self.data["projects"][self.project_name].get("coped_context")
             
-            if not os.path.isabs(source_root): source_root = os.path.join(self.project_path, source_root)
-            if not os.path.isabs(coped_root): coped_root = os.path.join(self.project_path, coped_root)
+            source_explicitly_set = raw_source_context is not None and raw_source_context != "" and raw_source_context != self.project_path
+            coped_explicitly_set = raw_coped_context is not None and raw_coped_context != ""
+            
+            source_root = raw_source_context if raw_source_context else self.project_path
+            coped_root = raw_coped_context if raw_coped_context else os.path.join("file", "shadow")
+            
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # If path starts with 'file', it's relative to coder directory (script_dir), not project_path
+            if not os.path.isabs(source_root):
+                if source_root.startswith("file" + os.sep) or source_root.startswith("file/"):
+                    source_root = os.path.join(script_dir, source_root)
+                else:
+                    source_root = os.path.join(self.project_path, source_root)
+            
+            if not os.path.isabs(coped_root):
+                if coped_root.startswith("file" + os.sep) or coped_root.startswith("file/"):
+                    coped_root = os.path.join(script_dir, coped_root)
+                else:
+                    coped_root = os.path.join(self.project_path, coped_root)
 
             source_root = os.path.abspath(source_root)
             coped_root = os.path.abspath(coped_root)
@@ -996,9 +1016,11 @@ class EnterWindow(QWidget):
             abs_selected = set()
             for p in selected_files:
                 abs_p = os.path.abspath(p)
-                # Parse safety check
-                rel_check = os.path.relpath(abs_p, self.project_path)
-                if not rel_check.startswith(".."):
+                # Safety check: Allow files under project_path OR under coder's file/ directory
+                rel_to_project = os.path.relpath(abs_p, self.project_path)
+                rel_to_file_dir = os.path.relpath(abs_p, os.path.join(script_dir, "file"))
+                
+                if not rel_to_project.startswith("..") or not rel_to_file_dir.startswith(".."):
                     abs_selected.add(abs_p)
 
             # Assign to contexts
@@ -1063,9 +1085,89 @@ class EnterWindow(QWidget):
             user_input = self.text_input.toPlainText()
             self.log(f"DEBUG: captured user_input ({len(user_input)} chars): {user_input[:20]}...")
             
-            if user_input:
-                content += "# Task Description\n" + user_input + "\n\n"
+            # Resolve Source/Coped Project Names
+            source_name = "[Not Selected]"
+            coped_name = "[Not Selected]"
+
+            def find_project_by_path(target_path):
+                target = os.path.normcase(os.path.abspath(target_path))
+                curr_proj_path_norm = os.path.normcase(os.path.abspath(self.project_path))
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                file_dir_norm = os.path.normcase(os.path.join(script_dir, "file"))
+                
+                self.log(f"DEBUG: find_project_by_path checking '{target}'")
+                
+                # Priority 1: Check Database for EXACT match (Handles nested projects)
+                for name, info in self.data.get("projects", {}).items():
+                    p_path = info.get("path")
+                    if p_path:
+                        norm_p = os.path.normcase(os.path.abspath(p_path))
+                        if norm_p == target:
+                            self.log(f"DEBUG: Found exact DB match: {name}")
+                            return name
+
+                # Priority 2: Check against Current Project (Root)
+                if target == curr_proj_path_norm:
+                     self.log("DEBUG: Exact match found (Current Project)")
+                     return self.project_name
+                
+                # Priority 3: Coped Folder (path is under file/<project>/<coped_name>)
+                # Example: file\order\two_none -> extract "two_none"
+                # file_dir_norm is already defined at start of function
+                if target.startswith(file_dir_norm + os.sep):
+                    rel_to_file = os.path.relpath(target, file_dir_norm)
+                    parts = rel_to_file.split(os.sep)
+                    if len(parts) >= 2:
+                        # parts[0] = origin project name (e.g., "order"), parts[1] = coped folder name
+                        coped_folder_name = parts[1]
+                        self.log(f"DEBUG: Coped folder name extracted: {coped_folder_name}")
+                        return coped_folder_name
+                    elif len(parts) == 1:
+                        # Just the folder name directly
+                        self.log(f"DEBUG: Direct folder name: {parts[0]}")
+                        return parts[0]
+                
+                # Priority 4: Subpath of Current?
+                if target.startswith(curr_proj_path_norm + os.sep):
+                    self.log("DEBUG: Subpath match found (Current Project)")
+                    return self.project_name
+
+                return None
+
+            # Only resolve names if contexts are explicitly set
+            if source_explicitly_set:
+                found_src = find_project_by_path(source_root)
+                if found_src: source_name = found_src
+
+            if coped_explicitly_set:
+                found_coped = find_project_by_path(coped_root)
+                if found_coped: coped_name = found_coped
+
+            # Always output Task Description Header & Project Context
+            content += "# Task Description\n"
+            content += f"Origin Project: {self.project_name}\n"
+
+            # Conditional Injection based on GUI Toggles
+            show_source = self.btn_toggle_src.isChecked()
+            show_shadow = self.btn_toggle_shadow.isChecked()
+            show_diff = self.btn_toggle_diff.isChecked()
+            
+            self.log(f"DEBUG: Toggles - Source: {show_source}, Shadow: {show_shadow}, Diff: {show_diff}")
+            self.log(f"DEBUG: Names - Current: {self.project_name}, Source: {source_name}, Coped: {coped_name}")
+
+            if show_diff:
+                content += f"Source Project: {source_name}\n"
+                content += f"Coped Project: {coped_name}\n"
             else:
+                if show_source:
+                    content += f"Source Project: {source_name}\n"
+                if show_shadow:
+                    content += f"Coped Project: {coped_name}\n"
+            
+            if user_input:
+                content += "\n" + user_input + "\n\n"
+            else:
+                content += "\n(No manual task description provided)\n\n"
                 self.log("DEBUG: User input is empty/None")
 
             # 3. Source Files (Only src_rels)
@@ -1225,6 +1327,32 @@ class EnterWindow(QWidget):
         except Exception as e:
             self.log(f"Error copying chat.txt: {e}")
 
+    def paste_ai_response(self):
+        """Paste AI response from clipboard and append to chat.txt"""
+        try:
+            clipboard_content = QApplication.clipboard().text()
+            if not clipboard_content:
+                QMessageBox.warning(self, "Error", "Clipboard is empty!")
+                return
+            
+            # Use self.project_path for consistency
+            chat_path = os.path.join(self.project_path, "chat.txt")
+            
+            if not os.path.exists(chat_path):
+                 QMessageBox.warning(self, "Error", "chat.txt not found! Generate it first.")
+                 return
+
+            with open(chat_path, "a", encoding="utf-8") as f:
+                f.write("\n\n# AI Response\n\n")
+                f.write(clipboard_content)
+            
+            self.log(f"Pasted {len(clipboard_content)} chars to chat.txt")
+            QMessageBox.information(self, "Success", "AI response appended to chat.txt!")
+            
+        except Exception as e:
+            self.log(f"Error pasting response: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to paste: {e}")
+
     # ------------------------
     # VS Code Extension
     # ------------------------
@@ -1241,19 +1369,20 @@ class EnterWindow(QWidget):
         except: pass
 
         # 2. Sync selected files to shadow (Initialize if needed)
-        try:
-            selected_files = self.data["projects"][self.project_name].get("selected_files", [])
-            shadow_root = os.path.join("file", "shadow")
-            os.makedirs(shadow_root, exist_ok=True)
-            for file_path in selected_files:
-                if os.path.exists(file_path):
-                    rel = os.path.relpath(file_path, self.project_path)
-                    dest = os.path.join(shadow_root, rel)
-                    # Only copy if not exists to act as init
-                    if not os.path.exists(dest):
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
-                        shutil.copy2(file_path, dest)
-        except: pass
+        # (DISABLED: Legacy shadow logic - coped folders are now per-project under file/<project>/<coped_name>)
+        # try:
+        #     selected_files = self.data["projects"][self.project_name].get("selected_files", [])
+        #     shadow_root = os.path.join("file", "shadow")
+        #     os.makedirs(shadow_root, exist_ok=True)
+        #     for file_path in selected_files:
+        #         if os.path.exists(file_path):
+        #             rel = os.path.relpath(file_path, self.project_path)
+        #             dest = os.path.join(shadow_root, rel)
+        #             # Only copy if not exists to act as init
+        #             if not os.path.exists(dest):
+        #                 os.makedirs(os.path.dirname(dest), exist_ok=True)
+        #                 shutil.copy2(file_path, dest)
+        # except: pass
 
         # 3. Open Shadow Manager Window instead of direct launch
         self.shadow_manager = ShadowManagerWindow(self.project_path, self)
@@ -1532,181 +1661,11 @@ class EnterWindow(QWidget):
         print(f"[prepare_and_launch] Final Files Count: {len(final_files)}")
         self.real_launch_vscode(list(final_files))
 
-    def generate_chat(self):
-        """Generate chat.txt with selected files based on toggle states"""
-        try:
-            # Use the same file gathering logic as prepare_and_launch
-            final_files = set()
-            raw_selected = self.data["projects"][self.project_name].get("selected_files", [])
-            abs_selected = set()
-            for p in raw_selected:
-                if os.path.isabs(p):
-                     abs_selected.add(os.path.normcase(p))
-                else:
-                     abs_selected.add(os.path.normcase(os.path.abspath(p)))
+    # [DUPLICATE generate_chat REMOVED]
 
-            # Context Roots
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Get Source Context (might be Origin or a Coped project)
-            source_context = self.data["projects"][self.project_name].get("source_context", self.project_path)
-            if os.path.isabs(source_context):
-                source_root = source_context
-            else:
-                source_root = os.path.join(script_dir, source_context)
-            source_root = os.path.abspath(source_root)
-            
-            # Get Coped Context
-            coped_context = self.data["projects"][self.project_name].get("coped_context", os.path.join("file", self.project_name, "shadow"))
-            if os.path.isabs(coped_context):
-                coped_root = coped_context
-            else:
-                coped_root = os.path.join(script_dir, coped_context)
-            coped_root = os.path.abspath(coped_root)
+    # [DUPLICATE generate_chat REMAINING CODE REMOVED]
 
-            # Gather files based on toggles
-            if self.btn_toggle_src.isChecked():
-                for p in abs_selected:
-                    # Match if file is within source_root OR is source_root itself
-                    if p.startswith(os.path.normcase(source_root) + os.sep) or p == os.path.normcase(source_root):
-                         final_files.add(p)
-
-            if self.btn_toggle_shadow.isChecked():
-                for p in abs_selected:
-                    # Match if file is within coped_root OR is coped_root itself
-                    if p.startswith(os.path.normcase(coped_root) + os.sep) or p == os.path.normcase(coped_root):
-                        final_files.add(p)
-
-            # Write to chat.txt
-            chat_path = os.path.join(script_dir, "file", "chat.txt")
-            os.makedirs(os.path.dirname(chat_path), exist_ok=True)
-
-            with open(chat_path, "w", encoding="utf-8") as f:
-                # Write Penter Unified Prompt from file
-                self.log("DEBUG: Reading prompt.txt...")
-                prompt_file = os.path.join("file", "prompt.txt")
-                if os.path.exists(prompt_file):
-                    try:
-                        with open(prompt_file, "r", encoding="utf-8") as pf:
-                            f.write(pf.read())
-                    except Exception as e:
-                        f.write(f"// Error reading prompt.txt: {e}\n\n")
-                else:
-                    f.write("# System Instructions\n(prompt.txt not found - fallback)\n\n")
-                
-                # Append Task Description from User Input
-                # Note: self.text_input is expected to exist if this is EnterWindow
-                if hasattr(self, 'text_input'):
-                    user_input = self.text_input.toPlainText()
-                    self.log(f"DEBUG: captured user_input from text_input ({len(user_input)} chars)")
-                    if user_input:
-                        f.write("\n# Task Description\n")
-                        f.write(user_input + "\n\n")
-                else:
-                    self.log("DEBUG: text_input widget not found in this window context.")
-                
-                # Check if Diff toggle is ON
-                show_diff = self.btn_toggle_diff.isChecked()
-                
-                if show_diff:
-                    f.write("# Differences (Source vs Coped)\n\n")
-                    # Generate diff for files that exist in both contexts
-                    import difflib
-                    for file_path in sorted(final_files):
-                        try:
-                            # Determine which context this file belongs to
-                            if file_path.startswith(os.path.normcase(source_root)):
-                                rel_path = os.path.relpath(file_path, source_root)
-                                counterpart = os.path.join(coped_root, rel_path)
-                                if os.path.exists(counterpart):
-                                    f.write(f"## {rel_path}\n\n")
-                                    with open(file_path, "r", encoding="utf-8", errors="ignore") as src:
-                                        source_lines = src.readlines()
-                                    with open(counterpart, "r", encoding="utf-8", errors="ignore") as cop:
-                                        coped_lines = cop.readlines()
-                                    
-                                    diff = difflib.unified_diff(source_lines, coped_lines, 
-                                                                fromfile=f"Source: {rel_path}",
-                                                                tofile=f"Coped: {rel_path}",
-                                                                lineterm="")
-                                    f.write("```diff\n")
-                                    for line in diff:
-                                        f.write(line + "\n")
-                                    f.write("```\n\n")
-                        except Exception as e:
-                            f.write(f"(Error generating diff for {file_path}: {e})\n\n")
-                    f.write("\n")
-                
-                f.write("# Selected Files\n\n")
-                
-                # Write file contents with line numbers
-                for file_path in sorted(final_files):
-                    try:
-                        # Determine context for tagging
-                        is_source = file_path.startswith(os.path.normcase(source_root))
-                        tag = "[Source]" if is_source else "[Coped]"
-                        
-                        # Use path relative to Script Dir (Project Root) to ensure uniqueness
-                        rel_path = os.path.relpath(file_path, script_dir)
-                        f.write(f"## {tag} {rel_path}\n\n")
-                        
-                        with open(file_path, "r", encoding="utf-8", errors="ignore") as src:
-                            lines = src.readlines()
-                            for i, line in enumerate(lines, 1):
-                                f.write(f"{i:5} | {line}")
-                        f.write("\n\n")
-                    except Exception as e:
-                        f.write(f"(Error reading {file_path}: {e})\n\n")
-
-            self.log(f"Generated chat.txt with {len(final_files)} files at: {chat_path}")
-            QMessageBox.information(self, "Success", f"Generated chat.txt with {len(final_files)} files!")
-            
-        except Exception as e:
-            self.log(f"Error generating chat: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to generate chat.txt: {e}")
-
-    def copy_chat(self):
-        """Copy chat.txt content to clipboard"""
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            chat_path = os.path.join(script_dir, "file", "chat.txt")
-            
-            if not os.path.exists(chat_path):
-                QMessageBox.warning(self, "Error", "chat.txt not found. Generate it first!")
-                return
-            
-            with open(chat_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            QApplication.clipboard().setText(content)
-            self.log(f"Copied {len(content)} characters to clipboard")
-            QMessageBox.information(self, "Success", "chat.txt copied to clipboard!")
-            
-        except Exception as e:
-            self.log(f"Error copying chat: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to copy: {e}")
-
-    def paste_ai_response(self):
-        """Paste AI response from clipboard and append to chat.txt"""
-        try:
-            clipboard_content = QApplication.clipboard().text()
-            if not clipboard_content:
-                QMessageBox.warning(self, "Error", "Clipboard is empty!")
-                return
-            
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            chat_path = os.path.join(script_dir, "file", "chat.txt")
-            
-            with open(chat_path, "a", encoding="utf-8") as f:
-                f.write("\n\n# AI Response\n\n")
-                f.write(clipboard_content)
-            
-            self.log(f"Pasted {len(clipboard_content)} characters to chat.txt")
-            QMessageBox.information(self, "Success", "AI response appended to chat.txt!")
-            
-        except Exception as e:
-            self.log(f"Error pasting response: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to paste: {e}")
+    # [DUPLICATE METHODS REMOVED]
 
 
 # ------------------------

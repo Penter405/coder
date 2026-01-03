@@ -142,6 +142,13 @@ if isuseable(enter_window):
         print("save to data.json")
     if click(generate_chat_txt_button):
         print("generate chat.txt with all our setting in the enter_window")
+        print("write data to chat.txt, include:prompt.txt")
+        if toggle_switch[0]=="turn on":
+            print("write data to chat.txt, include:source project name")
+        if toggle_switch[1]=="turn on":
+            print("write data to chat.txt, include:coped project name")
+        if toggle_switch[2]=="turn on":
+            print("write data to chat.txt, include:source project name,coped project name")
     if click(Open_vs_code_button):
         project_choose_window.open()#code will know what project to open
         print("open vs code ,must cheak toggle_switch[4]")

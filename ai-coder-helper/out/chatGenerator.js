@@ -41,12 +41,15 @@ class ChatGenerator {
     /**
      * Generate chat.txt content with task description, project tree, and selected files
      */
-    async generate(selectedFiles, taskDescription) {
+    async generate(selectedFiles, taskDescription, projectName) {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
         let content = '';
         // Section 1: Task Description
-        content += '# Task Description\n\n';
-        content += taskDescription + '\n\n';
+        content += '# Task Description\n';
+        if (projectName) {
+            content += `Current Project: ${projectName}\n`;
+        }
+        content += '\n' + taskDescription + '\n\n';
         // Penter Instructions (Injected)
         content += '# Output Format (IMPORTANT)\n';
         content += 'Please provide the solution in the following "Penter" format:\n';

@@ -94,8 +94,26 @@ function activate(context) {
         if (!taskDescription) {
             return;
         }
+        // Resolve Project Name from data.json
+        let projectName;
+        if (vscode.workspace.workspaceFolders) {
+            try {
+                const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const dataPath = path.join(root, 'file', 'data.json');
+                if (fs.existsSync(dataPath)) {
+                    const dataContent = fs.readFileSync(dataPath, 'utf8');
+                    const data = JSON.parse(dataContent);
+                    if (data.current_project) {
+                        projectName = data.current_project;
+                    }
+                }
+            }
+            catch (e) {
+                console.error("Failed to read project name:", e);
+            }
+        }
         try {
-            const chatContent = await chatGenerator.generate(selectedFiles, taskDescription);
+            const chatContent = await chatGenerator.generate(selectedFiles, taskDescription, projectName);
             // Copy to clipboard
             await vscode.env.clipboard.writeText(chatContent);
             // Also save to file
@@ -148,10 +166,30 @@ function activate(context) {
             return;
         }
         try {
-            // Apply DIRECTLY to Workspace
+            // Appply DIRECTLY to Workspace
             if (!vscode.workspace.workspaceFolders)
                 return;
-            const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            let root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            // TRY TO RESOLVE DYNAMIC ROOT from data.json
+            try {
+                const dataPath = path.join(root, 'file', 'data.json');
+                if (fs.existsSync(dataPath)) {
+                    const dataContent = fs.readFileSync(dataPath, 'utf8');
+                    const data = JSON.parse(dataContent);
+                    const currentProj = data.current_project;
+                    if (currentProj && data.projects && data.projects[currentProj]) {
+                        const projectPath = data.projects[currentProj].path;
+                        if (projectPath && fs.existsSync(projectPath)) {
+                            console.log(`Dynamic Root: Switching context to ${currentProj} -> ${projectPath}`);
+                            root = projectPath;
+                            source += ` [Context: ${currentProj}]`;
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.error("Failed to resolve dynamic root:", e);
+            }
             // Parse changes applying to Workspace Root
             const changes = changeApplier.parseChanges(penterContent, root);
             if (changes.length === 0) {

@@ -1,0 +1,8 @@
+﻿=== Current Project ===
+current_project: order
+
+=== All Projects ===
+  order:
+    path: C:\Users\ba\OneDrive\桌面\project\order
+    source_context: file\order\two_none
+    coped_context: None

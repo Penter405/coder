@@ -1,5 +1,6 @@
 import os
 import json
+from init import init_file
 
 FILE_DIR = "file"
 DATA_FILE = os.path.join(FILE_DIR, "data.json")
@@ -7,39 +8,7 @@ DATA_FILE = os.path.join(FILE_DIR, "data.json")
 # --------------------------
 # 初始化 file/data.json
 # --------------------------
-def init_file():
-    os.makedirs(FILE_DIR, exist_ok=True)
-    if not os.path.exists(DATA_FILE):
-        data = {
-            "project_path": "file\\target",
-            "task_description": "",
-            "projects": {},
-            "current_project": None
-        }
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    else:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
-        changed = False
-        if "projects" not in data:
-            data["projects"] = {}
-            changed = True
-        if "current_project" not in data:
-            data["current_project"] = None
-            changed = True
-        if "project_path" not in data:
-            data["project_path"] = "file\\target"
-            changed = True
-        if "task_description" not in data:
-            data["task_description"] = ""
-            changed = True
-        if changed:
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+# init_file imported from init.py
 
 def load_data():
     init_file()
