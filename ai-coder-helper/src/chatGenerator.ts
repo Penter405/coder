@@ -72,9 +72,17 @@ export class ChatGenerator {
         // Normalize paths
         const normSource = path.normalize(sourceRoot);
         const normCoped = path.normalize(copedRoot);
+        const projectBasePath = projectInfo.path || workspaceRoot;
 
         for (const f of selectedFiles) {
-            const normF = path.normalize(f);
+            // Resolve relative paths using project path
+            let normF: string;
+            if (path.isAbsolute(f)) {
+                normF = path.normalize(f);
+            } else {
+                // Relative path - resolve from project base path
+                normF = path.normalize(path.join(projectBasePath, f));
+            }
 
             // Check if in Source
             if (!path.relative(normSource, normF).startsWith('..')) {

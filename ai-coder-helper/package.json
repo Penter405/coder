@@ -113,6 +113,11 @@
       {
          "command": "aiCoder.rejectInstructionInline",
          "title": "Reject Instruction (Inline)"
+      },
+      {
+         "command": "aiCoder.toggleShadowDiff",
+         "title": "Toggle Shadow Diff Highlights",
+         "icon": "$(diff-multiple)"
       }
     ],
     "viewsContainers": {
@@ -192,6 +197,11 @@
           "command": "aiCoder.localPR",
           "when": "view == aiCoderShadow",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiCoder.toggleShadowDiff",
+          "when": "view == aiCoderShadow",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [

@@ -44,27 +44,30 @@ class ShadowFileItem extends vscode.TreeItem {
         this.originalPath = originalPath;
         this.isDirectory = isDirectory;
         this.resourceUri = vscode.Uri.file(shadowPath);
-        this.contextValue = isDirectory ? 'folder' : 'file';
+        this.contextValue = isDirectory ? 'shadowFolder' : 'shadowFile';
         if (isDirectory) {
             this.iconPath = new vscode.ThemeIcon('folder');
         }
         else {
             this.iconPath = new vscode.ThemeIcon('file');
+            // Open Shadow file directly for editing (not diff view)
             this.command = {
-                command: 'aiCoder.diffShadow',
-                title: 'Diff Shadow',
-                arguments: [this]
+                command: 'vscode.open',
+                title: 'Open Shadow File',
+                arguments: [vscode.Uri.file(shadowPath)]
             };
         }
     }
 }
 exports.ShadowFileItem = ShadowFileItem;
 class ShadowTreeProvider {
-    constructor() {
+    constructor(appRoot) {
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
         this.shadowRoot = '';
         this.workspaceRoot = '';
+        this.appRoot = '';
+        this.appRoot = appRoot || '';
         this.initializeRoots();
     }
     initializeRoots() {
@@ -74,43 +77,38 @@ class ShadowTreeProvider {
         }
     }
     updateShadowRoot() {
-        if (!this.workspaceRoot)
+        if (!this.workspaceRoot && !this.appRoot)
             return;
-        const dataPath = path.join(this.workspaceRoot, 'file', 'data.json');
+        // Use appRoot if provided, otherwise fall back to searching in workspaceRoot
+        const searchRoot = this.appRoot || this.workspaceRoot;
+        const dataPath = path.join(searchRoot, 'file', 'data.json');
+        console.log(`[ShadowTreeProvider] searchRoot: ${searchRoot}`);
+        console.log(`[ShadowTreeProvider] dataPath: ${dataPath}`);
         try {
             if (fs.existsSync(dataPath)) {
                 const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-                let foundShadow = false;
-                if (data.projects) {
-                    for (const projName in data.projects) {
-                        const info = data.projects[projName];
-                        const projPath = info.path; // Absolute path
-                        // Check if workspaceRoot matches projPath
-                        // Use relative check for robustness
-                        if (projPath && path.relative(this.workspaceRoot, projPath) === '') {
-                            this.shadowRoot = path.join(this.workspaceRoot, 'file', projName, 'shadow');
-                            // Verify existence, if not, try legacy
-                            if (!fs.existsSync(this.shadowRoot)) {
-                                const legacy = path.join(this.workspaceRoot, 'file', 'shadow');
-                                if (fs.existsSync(legacy))
-                                    this.shadowRoot = legacy;
-                            }
-                            foundShadow = true;
-                            break;
-                        }
+                const currentProj = data.current_project;
+                if (currentProj) {
+                    // Shadow is always at: appRoot/file/{projectName}/shadow/
+                    this.shadowRoot = path.join(searchRoot, 'file', currentProj, 'shadow');
+                    console.log(`[ShadowTreeProvider] shadowRoot: ${this.shadowRoot}`);
+                    // Verify existence
+                    if (!fs.existsSync(this.shadowRoot)) {
+                        fs.mkdirSync(this.shadowRoot, { recursive: true });
                     }
                 }
-                if (!foundShadow) {
-                    this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
+                else {
+                    this.shadowRoot = path.join(searchRoot, 'file', 'shadow');
                 }
             }
             else {
-                this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
+                console.log(`[ShadowTreeProvider] data.json not found at: ${dataPath}`);
+                this.shadowRoot = path.join(searchRoot, 'file', 'shadow');
             }
         }
         catch (e) {
-            console.error('Error reading data.json:', e);
-            this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
+            console.error('[ShadowTreeProvider] Error reading data.json:', e);
+            this.shadowRoot = path.join(searchRoot, 'file', 'shadow');
         }
     }
     refresh() {

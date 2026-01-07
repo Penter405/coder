@@ -8,6 +8,7 @@ import { ShadowTreeProvider, ShadowFileItem } from './shadowExplorer';
 import { ReviewProvider, ReviewItem } from './reviewProvider';
 import { PenterCodeLensProvider } from './penterCodeLensProvider';
 import { PenterDecorationProvider } from './penterDecorationProvider';
+import { ShadowDiffDecorationProvider } from './shadowDiffDecorationProvider';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Coder Helper is now active!');
@@ -23,9 +24,14 @@ export function activate(context: vscode.ExtensionContext) {
         canSelectMany: true
     });
 
-    // Shadow Explorer
-    const shadowProvider = new ShadowTreeProvider();
+    // Shadow Explorer - pass appRoot for reliable data.json location
+    const appRoot = path.dirname(context.extensionPath);
+    const shadowProvider = new ShadowTreeProvider(appRoot);
     vscode.window.registerTreeDataProvider('aiCoderShadow', shadowProvider);
+
+    // Shadow Diff Decoration Provider
+    const shadowDiffProvider = new ShadowDiffDecorationProvider(appRoot);
+    context.subscriptions.push({ dispose: () => shadowDiffProvider.dispose() });
 
     // Review Explorer
     const workspaceRoot = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0].uri.fsPath : '';
@@ -89,6 +95,14 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // 2.5 Toggle Shadow Diff Decorations
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aiCoder.toggleShadowDiff', () => {
+            const enabled = shadowDiffProvider.toggle();
+            vscode.window.showInformationMessage(`Shadow Diff Highlights: ${enabled ? 'ON' : 'OFF'}`);
+        })
+    );
+
     // 3. New PR (Sync Shadow) - Handles Context Selection
     context.subscriptions.push(
         vscode.commands.registerCommand('aiCoder.newPR', async (item?: FileItem | any, nodes?: FileItem[] | any) => {
@@ -101,6 +115,12 @@ export function activate(context: vscode.ExtensionContext) {
                 nodes.forEach((n: any) => { if (n.filePath) itemsToSync.push(n.filePath); });
             } else if (item && item.filePath) {
                 itemsToSync.push(item.filePath);
+            }
+
+            // Require at least one file to be selected
+            if (itemsToSync.length === 0) {
+                vscode.window.showWarningMessage('Please select files in the Opened Project tree first.');
+                return;
             }
 
             await vscode.commands.executeCommand('aiCoder.syncShadow', itemsToSync);

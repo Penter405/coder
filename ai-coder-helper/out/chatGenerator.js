@@ -70,13 +70,6 @@ class ChatGenerator {
                 }
             }
         }
-        if (!projectName && data.current_project) {
-            // Fallback: Use current_project if path check failed (maybe differing conventions)
-            projectName = data.current_project;
-            if (data.projects && data.projects[projectName]) {
-                projectInfo = data.projects[projectName];
-            }
-        }
         if (!projectName) {
             return "// Error: Current workspace not found in data.json projects.";
         }
@@ -87,7 +80,7 @@ class ChatGenerator {
         const rawCopedContext = projectInfo.coped_context;
         // Default Contexts
         // If not set, Source is Project Root
-        const sourceRoot = rawSourceContext ? rawSourceContext : (projectInfo.path || workspaceRoot);
+        const sourceRoot = rawSourceContext ? rawSourceContext : workspaceRoot;
         // If not set, Coped is file/shadow (absolute path preferred logic)
         // main.py logic: if relative, verify against project or file dir.
         // Simplified: Resolve absolute.
@@ -101,16 +94,31 @@ class ChatGenerator {
             else
                 copedRoot = path.join(workspaceRoot, 'file', 'shadow');
         }
-        // 4. Map Files
-        // selectedFiles are Source Paths (absolute)
-        const srcFiles = selectedFiles;
-        const copedMapping = new Map(); // SourcePath -> ShadowPath
+        // 4. Filter Files
+        const srcFiles = [];
+        const copedFiles = [];
+        // Normalize paths
+        const normSource = path.normalize(sourceRoot);
+        const normCoped = path.normalize(copedRoot);
+        const projectBasePath = projectInfo.path || workspaceRoot;
         for (const f of selectedFiles) {
-            // Calculate relative path from sourceRoot
-            const rel = path.relative(sourceRoot, f);
-            if (!rel.startsWith('..')) {
-                const shadowPath = path.join(copedRoot, rel);
-                copedMapping.set(f, shadowPath);
+            // Resolve relative paths using project path
+            let normF;
+            if (path.isAbsolute(f)) {
+                normF = path.normalize(f);
+            }
+            else {
+                // Relative path - resolve from project base path
+                normF = path.normalize(path.join(projectBasePath, f));
+            }
+            // Check if in Source
+            if (!path.relative(normSource, normF).startsWith('..')) {
+                srcFiles.push(normF);
+            }
+            // Check if in Coped
+            // Note: If sourceRoot == copedRoot, the file is in both lists.
+            if (!path.relative(normCoped, normF).startsWith('..')) {
+                copedFiles.push(normF);
             }
         }
         // 5. Build Content
@@ -160,22 +168,14 @@ class ChatGenerator {
         // Shadow Files
         if (toggles.shadow) {
             content += `# Shadow Files (Context: ${path.basename(copedRoot)})\n`;
-            if (copedMapping.size === 0)
-                content += "(No shadow files mapped)\n\n";
-            // Sort by source path for consistency
-            const sortedKeys = Array.from(copedMapping.keys()).sort();
-            for (const src of sortedKeys) {
-                const shadowPath = copedMapping.get(src);
-                const rel = path.relative(copedRoot, shadowPath); // Should match src relative
-                content += `## (Shadow) ${rel}\n\`\`\`${path.extname(shadowPath).slice(1) || 'txt'}\n`;
+            if (copedFiles.length === 0)
+                content += "(No shadow files selected)\n\n";
+            for (const f of copedFiles.sort()) {
+                const rel = path.relative(copedRoot, f);
+                content += `## (Shadow) ${rel}\n\`\`\`${path.extname(f).slice(1) || 'txt'}\n`;
                 try {
-                    if (fs.existsSync(shadowPath)) {
-                        const lines = fs.readFileSync(shadowPath, 'utf8').split(/\r?\n/);
-                        lines.forEach((line, i) => content += `${(i + 1).toString().padEnd(4)} | ${line}\n`);
-                    }
-                    else {
-                        content += "(File does not exist in Shadow Layer)\n";
-                    }
+                    const lines = fs.readFileSync(f, 'utf8').split(/\r?\n/);
+                    lines.forEach((line, i) => content += `${(i + 1).toString().padEnd(4)} | ${line}\n`);
                 }
                 catch (e) {
                     content += `(Error reading file: ${e})\n`;
@@ -186,18 +186,23 @@ class ChatGenerator {
         // Diff Report
         if (toggles.diff) {
             content += '# Diff Report (Source -> Shadow)\n';
-            const sortedKeys = Array.from(copedMapping.keys()).sort();
-            if (sortedKeys.length === 0) {
-                content += "(No files selected for diff)\n\n";
+            // Find Intersection by Relative Path
+            const srcRels = new Map();
+            srcFiles.forEach(f => srcRels.set(path.relative(sourceRoot, f), f));
+            const copedRels = new Map();
+            copedFiles.forEach(f => copedRels.set(path.relative(copedRoot, f), f));
+            const commonRels = [...srcRels.keys()].filter(r => copedRels.has(r)).sort();
+            if (commonRels.length === 0) {
+                content += "(No common files selected for diff)\n\n";
             }
             else {
-                const diffReport = this.generateDiffReport(sortedKeys, copedMapping);
+                const diffReport = this.generateDiffReport(commonRels, srcRels, copedRels);
                 content += diffReport + "\n\n";
             }
         }
         return content;
     }
-    generateDiffReport(srcFiles, copedMapping) {
+    generateDiffReport(rels, srcMap, dstMap) {
         // Simple line-based diff simulation or minimal report
         // Since we don't have python's difflib easily available in node without import, 
         // we'll just implement a basic check or placeholder. 
@@ -206,18 +211,19 @@ class ChatGenerator {
         // OR try to implement a naive diff.
         // Given complexity, let's list Modified files.
         let report = "";
-        for (const sPath of srcFiles) {
-            const dPath = copedMapping.get(sPath);
-            const rel = path.basename(sPath); // Or relative path?
+        for (const rel of rels) {
+            const sPath = srcMap.get(rel);
+            const dPath = dstMap.get(rel);
             try {
-                if (!fs.existsSync(dPath)) {
-                    report += `### ${rel}\n[New File in Source / Missing in Shadow]\n`;
-                    continue;
-                }
                 const sContent = fs.readFileSync(sPath, 'utf8');
                 const dContent = fs.readFileSync(dPath, 'utf8');
                 if (sContent !== dContent) {
                     report += `### ${rel}\n[Modified]\n`;
+                    // Naive line count check or first difference?
+                    // Implementing full diff logic in TS without lib is risky for this agent.
+                    // Access python app logic? No.
+                    // Just prompt the user that diff is available in Console App if they need deep diff?
+                    // Or provide simple "Modified" tag.
                 }
             }
             catch (e) {
