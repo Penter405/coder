@@ -162,23 +162,25 @@ The AI Coder Helper uses the "Penter" format to apply changes.
 ### Block Format
 ```penter
 Penter
-BEGIN
-CMD <args>...
-END
+{
+    FILE "path/to/file.ext" {
+        ... operations ...
+    }
+}
 ```
 
 ### Commands
 
 | Command | Syntax | Description |
 | :--- | :--- | :--- |
-| **FILE** | `FILE <path>` | Sets the current context to `<path>`. REQUIRED before editing. |
-| **ADD** | `ADD <line>` | Inserts code **BEFORE** `<line>`. The existing line shifts down. |
-| **ADD_AFTER** | `ADD_AFTER <line>` | Inserts code **AFTER** `<line>`. Useful for appending. |
-| **REMOVE** | `REMOVE <start>-<end>` | Removes lines from `<start>` to `<end>` (inclusive). |
-| **Code Block** | `<<<` ... `>>>` | Encloses the code content for `ADD`/`ADD_AFTER`/`CREATE`. |
-| **CREATE** | `CREATE <path>` | Creates a new file. Follow by code block for content. |
-| **DELETE** | `DELETE <path>` | Deletes a file. |
-| **RENAME** | `RENAME <old> <new>` | Renames a file. |
-| **MKDIR** | `MKDIR <path>` | Creates a directory (recursive). |
-| **RMDIR** | `RMDIR <path>` | Removes a directory (recursive). |
+| **FILE** | `FILE "path" { ... }` | Context block for file operations. |
+| **ADD** | `ADD n { <<< code >>> }` | Inserts code **BEFORE** line `n`. |
+| **ADD_AFTER** | `ADD_AFTER n { <<< code >>> }` | Inserts code **AFTER** line `n`. |
+| **REMOVE** | `REMOVE start-end { }` | Removes lines (inclusive). Empty block. |
+| **Code Block** | `<<<` ... `>>>` | Encloses content inside ADD/CREATE blocks. |
+| **CREATE** | `CREATE { <<< content >>> }` | Creates new file (inside FILE block). |
+| **DELETE** | `DELETE { }` | Deletes file (inside FILE block). |
+| **RENAME** | `RENAME "new_name" { }` | Renames file (inside FILE block). |
+| **MKDIR** | `MKDIR "path" { }` | Creates directory (recursive). |
+| **RMDIR** | `RMDIR "path" { }` | Removes directory (recursive). |
 

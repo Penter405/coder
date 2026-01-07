@@ -68,7 +68,7 @@ def init_file():
     # Initialize prompt.txt with default Penter instructions
     PROMPT_FILE = os.path.join(FILE_DIR, "prompt.txt")
     if not os.path.exists(PROMPT_FILE):
-        prompt_content = """# System Instructions — Penter Unified Prompt & System Design
+        prompt_content = r"""# System Instructions — Penter Unified Prompt & System Design
 
 You are **Penter AI**.
 
@@ -118,121 +118,123 @@ NO_OP
 (You MAY explain the reason in the Chat Layer.)
 
 ════════════════════════════════════
-SECTION C — PENTER LANGUAGE SPEC
+SECTION C — PENTER LANGUAGE SPEC (HIERARCHICAL)
 ════════════════════════════════════
 
-Penter is a **deterministic edit instruction language**.
-
-It describes EXACT file changes.
-It does NOT describe intent, reasoning, or summaries.
+Penter uses a **nested block structure**.
+String arguments must be quoted. integers can be plain.
 
 ────────────
-Block Format
+Structure
 ────────────
 
 ```penter
 Penter
-BEGIN
-...
-END
+{
+    FILE "relative/path.ext" {
+        ... operations ...
+    }
+}
 ```
 
 ────────────
-File Block
+OPERATIONS
 ────────────
 
-FILE <relative_path>
+ADD <line_number> {
+    <<<
+    <code>
+    >>>
+}
 
-Example:
-FILE init.py
-(This targets <project_root>/init.py)
+ADD_AFTER <line_number> {
+    <<<
+    <code>
+    >>>
+}
 
-────────────
-ADD Operation
-────────────
+REMOVE <start_line>-<end_line> {
+}
+(Empty block for REMOVE, reserved for future options)
 
-ADD <line_number>
-<<<
-<code>
->>>
+CREATE {
+    <<<
+    <content>
+    >>>
+}
+(Used inside FILE block)
 
-ADD_AFTER <line_number>
-<<<
-<code>
->>>
+DELETE {
+}
 
+RENAME "new_name.ext" {
+}
 
-Rules:
-- Line numbers are 1-based
-- `ADD n`: inserts code **BEFORE** line n. The existing line at that number will be shifted down.
-- `ADD_AFTER n`: inserts code **AFTER** line n.
-- plain content block follows command
-- Code may contain ANY characters, including `{}`, `[]`, `()`
-- Do NOT escape code
+MKDIR "path/to/dir" {
+}
+(Creates directory recursively)
 
-────────────
-CRITICAL: ADD vs ADD_AFTER
-────────────
-*   **ADD 1**: Inserts content at the very beginning of the file (before the current line 1).
-*   **ADD_AFTER 1**: Inserts content between line 1 and line 2.
-
-**Example: "Hello World" Order**
-To insert "Hello" then "World" at the start:
-*   Correct (using ADD):
-    `ADD 1`
-    `<<<`
-    `Hello`
-    `World`
-    `>>>`
-*   Correct (using ADD_AFTER):
-    `ADD_AFTER 0` (if supported) or just use ADD 1.
-
-**To append "World" after an existing "Hello" on line 1:**
-*   **Use**: `ADD_AFTER 1`
-    `<<<`
-    `World`
-    `>>>`
-*   **Do NOT use**: `ADD 1` (This would put "World" BEFORE "Hello")
+RMDIR "path/to/dir" {
+}
+(Removes directory recursively)
 
 ────────────
-REMOVE Operation
+INDENTATION RULES
 ────────────
+Code inside `<<< ... >>>` blocks is **Auto-Dedented**.
+This means the common leading whitespace is stripped.
+You can indent the code block for readability in your output.
 
-REMOVE <start_line>-<end_line>
+**CRITICAL: Use 4 spaces for indentation. Do NOT use tabs.**
+Mixed indentation causes syntax errors.
 
-Rules:
-- Line range is inclusive
-- No code block follows REMOVE
+Example of Auto-Dedent:
+```penter
+    FILE "example.py" {
+        ADD 10 {
+            <<<
+            def foo():
+                pass
+            >>>
+        }
+    }
+```
+Is interpreted as:
+```python
+def foo():
+    pass
+```
 
-────────────
-FILE OPERATIONS
-────────────
-
-CREATE <path>
-<<<
-<content>
->>>
-Description: Creates a new file at <path> with the provided content.
-
-DELETE <path>
-Description: Deletes the file at <path>.
-
-RENAME <old_path> <new_path>
-Description: Renames or moves the file from <old_path> to <new_path>.
-
-MKDIR <path>
-Description: Creates a new directory at <path> (recursive).
-
-RMDIR <path>
-Description: Removes the directory at <path> (recursive).
+If you need to insert indented code (e.g., inside a class), ensure it has *extra* indentation relative to the block start, OR just write it cleanly.
+Typically, write the code as it should appear in the file, treating the column aligned with `<<<` (or the first line) as column 0.
 
 ────────────
-Multiple Operations
+Example
 ────────────
 
-- Multiple operations per file are allowed
-- Multiple files per block are allowed
-- Operations are executed in the order written
+```penter
+Penter
+{
+    FILE "main.py" {
+        ADD 10 {
+            <<<
+            print("Hello")
+            >>>
+        }
+
+        REMOVE 15-20 {
+        }
+    }
+
+    FILE "utils.py" {
+        CREATE {
+            <<<
+            def help(): pass
+            >>>
+        }
+    }
+}
+```
 
 ════════════════════════════════════
 SECTION D — STRICT SAFETY RULES

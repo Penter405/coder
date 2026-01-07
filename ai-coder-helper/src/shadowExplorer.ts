@@ -1,57 +1,102 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 
 export class ShadowFileItem extends vscode.TreeItem {
-    public readonly realFilePath: string;
+    public readonly originalPath: string;
+    public readonly shadowPath: string;
+    public readonly isDirectory: boolean;
 
     constructor(
-        public readonly shadowFilePath: string,
-        public readonly relativePath: string
+        name: string,
+        shadowPath: string,
+        originalPath: string,
+        isDirectory: boolean
     ) {
-        super(relativePath, vscode.TreeItemCollapsibleState.None);
+        super(name, isDirectory ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
 
-        this.tooltip = `Shadow: ${shadowFilePath}`;
-        this.contextValue = 'shadowFile';
-        this.command = {
-            command: 'aiCoder.diffShadow',
-            title: 'Review Changes',
-            arguments: [this]
-        };
+        this.shadowPath = shadowPath;
+        this.originalPath = originalPath;
+        this.isDirectory = isDirectory;
 
-        // Find real file path
-        if (vscode.workspace.workspaceFolders) {
-            const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            this.realFilePath = path.join(root, relativePath);
+        this.resourceUri = vscode.Uri.file(shadowPath);
+        this.contextValue = isDirectory ? 'folder' : 'file';
+
+        if (isDirectory) {
+            this.iconPath = new vscode.ThemeIcon('folder');
         } else {
-            this.realFilePath = '';
+            this.iconPath = new vscode.ThemeIcon('file');
+            this.command = {
+                command: 'aiCoder.diffShadow',
+                title: 'Diff Shadow',
+                arguments: [this]
+            };
         }
-
-        this.iconPath = new vscode.ThemeIcon('git-pull-request');
     }
 }
 
 export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileItem> {
-    private _onDidChangeTreeData: vscode.EventEmitter<ShadowFileItem | undefined | null | void> =
-        new vscode.EventEmitter<ShadowFileItem | undefined | null | void>();
-    readonly onDidChangeTreeData: vscode.Event<ShadowFileItem | undefined | null | void> =
-        this._onDidChangeTreeData.event;
+    private _onDidChangeTreeData: vscode.EventEmitter<ShadowFileItem | undefined | null | void> = new vscode.EventEmitter<ShadowFileItem | undefined | null | void>();
+    readonly onDidChangeTreeData: vscode.Event<ShadowFileItem | undefined | null | void> = this._onDidChangeTreeData.event;
+
+    private shadowRoot: string = '';
+    private workspaceRoot: string = '';
 
     constructor() {
-        // Watch for changes in shadow folder
-        if (vscode.workspace.workspaceFolders) {
-            const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            // Watch recursively under file/ for any shadow folder
-            const shadowPattern = new vscode.RelativePattern(root, 'file/**/shadow/**/*');
-            const watcher = vscode.workspace.createFileSystemWatcher(shadowPattern);
+        this.initializeRoots();
+    }
 
-            watcher.onDidChange(() => this.refresh());
-            watcher.onDidCreate(() => this.refresh());
-            watcher.onDidDelete(() => this.refresh());
+    private initializeRoots() {
+        if (vscode.workspace.workspaceFolders) {
+            this.workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            this.updateShadowRoot();
+        }
+    }
+
+    private updateShadowRoot() {
+        if (!this.workspaceRoot) return;
+
+        const dataPath = path.join(this.workspaceRoot, 'file', 'data.json');
+        try {
+            if (fs.existsSync(dataPath)) {
+                const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+
+                let foundShadow = false;
+                if (data.projects) {
+                    for (const projName in data.projects) {
+                        const info = data.projects[projName];
+                        const projPath = info.path; // Absolute path
+
+                        // Check if workspaceRoot matches projPath
+                        // Use relative check for robustness
+                        if (projPath && path.relative(this.workspaceRoot, projPath) === '') {
+                            this.shadowRoot = path.join(this.workspaceRoot, 'file', projName, 'shadow');
+                            // Verify existence, if not, try legacy
+                            if (!fs.existsSync(this.shadowRoot)) {
+                                const legacy = path.join(this.workspaceRoot, 'file', 'shadow');
+                                if (fs.existsSync(legacy)) this.shadowRoot = legacy;
+                            }
+                            foundShadow = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundShadow) {
+                    this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
+                }
+
+            } else {
+                this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
+            }
+        } catch (e) {
+            console.error('Error reading data.json:', e);
+            this.shadowRoot = path.join(this.workspaceRoot, 'file', 'shadow');
         }
     }
 
     refresh(): void {
+        this.updateShadowRoot();
         this._onDidChangeTreeData.fire();
     }
 
@@ -60,157 +105,124 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
     }
 
     async getChildren(element?: ShadowFileItem): Promise<ShadowFileItem[]> {
-        if (!vscode.workspace.workspaceFolders) {
-            return [];
-        }
+        if (!this.workspaceRoot) return [];
+        if (!this.shadowRoot || !fs.existsSync(this.shadowRoot)) return [];
 
-        if (element) {
-            return []; // Flat list for now
-        }
+        const searchDir = element ? element.shadowPath : this.shadowRoot;
 
         const items: ShadowFileItem[] = [];
-        const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-
-        // Determine Project Name from data.json to find specific shadow folder
-        let projectName = "";
-        let shadowRoot: string | undefined;
         try {
-            // Helper to search up for file/data.json
-            const findDataJson = (startPath: string): string | null => {
-                let current = startPath;
-                const rootAnchor = path.parse(startPath).root;
+            const entries = fs.readdirSync(searchDir, { withFileTypes: true });
 
-                while (current !== rootAnchor) {
-                    let candidate = path.join(current, 'file', 'data.json');
-                    if (fs.existsSync(candidate)) return candidate;
-                    candidate = path.join(current, 'data.json'); // Backup check
+            for (const entry of entries) {
+                if (entry.name === '.git' || entry.name === '__pycache__') continue;
 
-                    current = path.dirname(current);
-                    if (current === path.dirname(current)) break;
-                }
-                return null;
-            };
+                const shadowPath = path.join(searchDir, entry.name);
 
-            const dataPath = findDataJson(root);
-            if (dataPath && fs.existsSync(dataPath)) {
-                const dataContent = fs.readFileSync(dataPath, 'utf8');
-                const data = JSON.parse(dataContent);
-                if (data.current_project) {
-                    projectName = data.current_project;
-                }
+                // Calculate original path
+                // relative from shadowRoot -> apply to workspaceRoot
+                // NOTE: shadowRoot is e.g. workspace/file/Project/shadow
+                // We want to map to workspace/Project/... (or just workspace/...)
+                // Current shadowRoot logic assumes shadow is DEEP inside 'file'.
+                // If we want to map back to Source, we take relative path from shadowRoot.
 
-                // Fix: Anchor shadowRoot to App Root
-                const appRoot = path.dirname(path.dirname(dataPath));
-                if (projectName) {
-                    // Overwrite standard logic with absolute app root path
-                    shadowRoot = path.join(appRoot, 'file', projectName, 'shadow');
-                }
+                const relative = path.relative(this.shadowRoot, shadowPath);
+                const originalPath = path.join(this.workspaceRoot, relative);
+
+                items.push(new ShadowFileItem(
+                    entry.name,
+                    shadowPath,
+                    originalPath,
+                    entry.isDirectory()
+                ));
             }
+
+            // Sort: directories first
+            items.sort((a, b) => {
+                if (a.isDirectory && !b.isDirectory) return -1;
+                if (!a.isDirectory && b.isDirectory) return 1;
+                // Safe access to label (inherited from TreeItem) which is 'name' passed to super
+                // But TreeItem.label can be string or TreeItemLabel. We passed string 'name'.
+                const labelA = typeof a.label === 'string' ? a.label : a.label?.label || '';
+                const labelB = typeof b.label === 'string' ? b.label : b.label?.label || '';
+                return labelA.localeCompare(labelB);
+            });
+
         } catch (e) {
-            console.error(e);
-        }
-
-        if (!projectName || !shadowRoot) {
-            return [];
-        }
-
-        // We already set shadowRoot above correctly if data.json was found.
-        // If not found, fall back to workspace relative (legacy behavior or empty)
-        if (!shadowRoot) shadowRoot = path.join(root, 'file', projectName, 'shadow');
-
-        if (!fs.existsSync(shadowRoot)) {
-            return [];
-        }
-
-        // Recursive walk
-        const walk = (dir: string, base: string) => {
-            const files = fs.readdirSync(dir);
-            for (const file of files) {
-                const fullPath = path.join(dir, file);
-                const stat = fs.statSync(fullPath);
-
-                if (stat.isDirectory()) {
-                    walk(fullPath, base);
-                } else {
-                    const relative = path.relative(base, fullPath);
-                    items.push(new ShadowFileItem(fullPath, relative));
-                }
-            }
-        };
-
-        try {
-            walk(shadowRoot, shadowRoot);
-        } catch (e) {
-            console.error(e);
+            console.error('Error in ShadowTreeProvider.getChildren:', e);
         }
 
         return items;
     }
 
-    async mergeFile(item: ShadowFileItem) {
-        if (fs.existsSync(item.shadowFilePath)) {
-            const content = fs.readFileSync(item.shadowFilePath, 'utf8');
-            // Ensure target dir exists
-            const targetDir = path.dirname(item.realFilePath);
-            if (!fs.existsSync(targetDir)) {
-                fs.mkdirSync(targetDir, { recursive: true });
+    private log(message: string) {
+        if (this.workspaceRoot) {
+            const logPath = path.join(this.workspaceRoot, 'file', 'log.txt');
+            // Ensure dir exists
+            const dir = path.dirname(logPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            const timestamp = new Date().toISOString();
+            const entry = `[${timestamp}] SHADOW_ACTION: ${message}\n`;
+
+            try {
+                fs.appendFileSync(logPath, entry);
+            } catch (e) {
+                console.error("Failed to write to log:", e);
             }
-
-            fs.writeFileSync(item.realFilePath, content, 'utf8');
-
-            // Remove shadow file after merge
-            fs.unlinkSync(item.shadowFilePath);
-
-            vscode.window.showInformationMessage(`Merged ${item.relativePath}`);
-            this.refresh();
         }
     }
 
-    async discardFile(item: ShadowFileItem) {
-        if (fs.existsSync(item.shadowFilePath)) {
-            fs.unlinkSync(item.shadowFilePath);
-            vscode.window.showInformationMessage(`Discarded shadow copy of ${item.relativePath}`);
-            this.refresh();
-        }
-    }
+    async mergeFile(item: ShadowFileItem) {
+        try {
+            if (fs.existsSync(item.shadowPath)) {
+                const content = fs.readFileSync(item.shadowPath, 'utf8');
 
-    async mergeAll() {
-        // Iterate all items and merge
-        const items = await this.getChildren();
-        if (items.length === 0) {
-            vscode.window.showInformationMessage("No shadow files to merge.");
-            return;
-        }
-
-        let mergedCount = 0;
-        for (const item of items) {
-            if (fs.existsSync(item.shadowFilePath)) {
                 // Ensure target dir exists
-                const targetDir = path.dirname(item.realFilePath);
+                const targetDir = path.dirname(item.originalPath);
                 if (!fs.existsSync(targetDir)) {
                     fs.mkdirSync(targetDir, { recursive: true });
                 }
 
-                // Copy Content
-                const content = fs.readFileSync(item.shadowFilePath, 'utf8');
-
-                // Handling Deletes: Check for marker?
-                // In extension.ts we wrote __DELETED__ for deletes.
-                if (content === "__DELETED__") {
-                    if (fs.existsSync(item.realFilePath)) {
-                        fs.unlinkSync(item.realFilePath);
+                // Handle Deletes (if marker exists, logic from before)
+                if (content.trim() === "__DELETED__") {
+                    if (fs.existsSync(item.originalPath)) {
+                        fs.unlinkSync(item.originalPath);
+                        this.log(`Merged DELETE: ${item.originalPath}`);
                     }
                 } else {
-                    fs.writeFileSync(item.realFilePath, content, 'utf8');
+                    fs.writeFileSync(item.originalPath, content, 'utf8');
+                    this.log(`Merged FILE: ${item.originalPath}`);
                 }
 
-                // Remove shadow file
-                fs.unlinkSync(item.shadowFilePath);
-                mergedCount++;
-            }
-        }
+                // Remove shadow file after merge?
+                // Or keep it? Usually merge clears the shadow.
+                fs.unlinkSync(item.shadowPath);
 
-        vscode.window.showInformationMessage(`Merged ${mergedCount} files from Shadow Layer.`);
-        this.refresh();
+                // Refresh
+                this.refresh();
+                vscode.window.showInformationMessage(`Merged ${path.basename(item.originalPath)}`);
+
+                // Try to refresh Opended Project view too if command available
+                vscode.commands.executeCommand('aiCoderFiles.refresh');
+            }
+        } catch (e) {
+            vscode.window.showErrorMessage(`Merge failed: ${e}`);
+            console.error(e);
+        }
+    }
+
+    async discardFile(item: ShadowFileItem) {
+        try {
+            if (fs.existsSync(item.shadowPath)) {
+                fs.unlinkSync(item.shadowPath);
+                const msg = `Discarded shadow copy of ${path.basename(item.originalPath)}`;
+                vscode.window.showInformationMessage(msg);
+                this.log(msg);
+                this.refresh();
+            }
+        } catch (e) {
+            vscode.window.showErrorMessage(`Discard failed: ${e}`);
+        }
     }
 }

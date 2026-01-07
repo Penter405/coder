@@ -75,6 +75,44 @@
         "command": "aiCoder.localPR",
         "title": "Local PR (Merge to Project)",
         "icon": "$(git-merge)"
+      },
+      {
+        "command": "aiCoder.acceptInstruction",
+        "title": "Accept Instruction",
+        "icon": "$(check)"
+      },
+      {
+        "command": "aiCoder.rejectInstruction",
+        "title": "Reject Instruction",
+        "icon": "$(close)"
+      },
+      {
+        "command": "aiCoder.acceptAllInstructions",
+        "title": "Accept All",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "aiCoder.rejectAllInstructions",
+        "title": "Reject All",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "aiCoder.syncShadow",
+        "title": "Sync Project to Shadow",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "aiCoder.newPR",
+        "title": "New PR (Sync Shadow)",
+        "icon": "$(git-pull-request)"
+      },
+      {
+         "command": "aiCoder.acceptInstructionInline",
+         "title": "Accept Instruction (Inline)"
+      },
+      {
+         "command": "aiCoder.rejectInstructionInline",
+         "title": "Reject Instruction (Inline)"
       }
     ],
     "viewsContainers": {
@@ -90,13 +128,19 @@
       "aiCoder": [
         {
           "id": "aiCoderFiles",
-          "name": "Selected Files",
+          "name": "Opened Project",
           "type": "tree",
           "icon": "$(list-unordered)"
         },
         {
+          "id": "aiCoderReview",
+          "name": "Penter Instructions (Review)",
+          "type": "tree",
+          "icon": "$(checklist)"
+        },
+        {
           "id": "aiCoderShadow",
-          "name": "Shadow Layer (Review)",
+          "name": "Shadow Layer (Preview)",
           "type": "tree",
           "icon": "$(git-pull-request)"
         }
@@ -110,6 +154,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "aiCoder.newPR",
+          "when": "view == aiCoderFiles",
+          "group": "navigation@1.5"
+        },
+        {
           "command": "aiCoder.refreshFiles",
           "when": "view == aiCoderFiles",
           "group": "navigation@2"
@@ -118,6 +167,16 @@
           "command": "aiCoder.applyChanges",
           "when": "view == aiCoderFiles",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiCoder.acceptAllInstructions",
+          "when": "view == aiCoderReview",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiCoder.rejectAllInstructions",
+          "when": "view == aiCoderReview",
+          "group": "navigation@2"
         },
         {
           "command": "aiCoder.applyAllAndRun",
@@ -136,6 +195,16 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "aiCoder.acceptInstruction",
+          "when": "view == aiCoderReview && viewItem == instruction",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiCoder.rejectInstruction",
+          "when": "view == aiCoderReview && viewItem == instruction",
+          "group": "inline@2"
+        },
         {
           "command": "aiCoder.testShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",

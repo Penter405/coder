@@ -1,0 +1,74 @@
+ai 寫了 plan B:
+Implementation Plan - UI Refactor & Inline Penter Review
+The goal is to refine the UI semantics ("Opened Project", "New PR") and implement CodeLens provider for 
+chat.txt
+ to enable inline "Aspect [Accept] / [Reject]" directly in the instruction file.
+
+User Review Required
+None. These are UI logic refinements requested by the user.
+
+Proposed Changes
+VS Code Extension (ai-coder-helper)
+[MODIFY] 
+package.json
+Rename View: aiCoderFiles -> "Opened Project" (was "Selected Files").
+Add Commands:
+aiCoder.newPR: "New PR" (Sync Project to Shadow).
+aiCoder.acceptInstructionInline: Helper for CodeLens.
+aiCoder.rejectInstructionInline: Helper for CodeLens.
+Menus:
+Add aiCoder.newPR to view/title of "Opened Project" view.
+Ensure aiCoderFiles view context menu does not show checkboxes (handled in code).
+[MODIFY] 
+src/extension.ts
+Register CodeLensProvider: PenterCodeLensProvider.
+Register Decoration Provider/Logic:
+Listen to onedidChangeActiveTextEditor and reviewProvider.onDidChangeTreeData.
+Apply Decorations to 
+chat.txt
+ based on Instruction Status.
+Implement aiCoder.newPR:
+Reuse logic from aiCoder.syncShadow.
+Provide user feedback: "New Shadow Layer Created (PR)".
+[NEW] 
+src/penterCodeLensProvider.ts
+Implement vscode.CodeLensProvider.
+Actions:
+Aspect [Accept]: Calls aiCoder.acceptInstructionInline(id).
+Aspect [Reject]: Calls aiCoder.rejectInstructionInline(id).
+Logic:
+Parses document to find Penter blocks.
+Matches them with reviewProvider.getInstructions() (using fuzzy or range mapping).
+If status is Rejected, show Aspect [Reject] (Applied) or similar?
+Better: CodeLens always shows actions. Decorations show state.
+[NEW] 
+src/penterDecorationProvider.ts
+Visual State:
+rejectedDecorationType: { opacity: 0.5, textDecoration: 'line-through' }
+acceptedDecorationType: { gutterIconPath: ... } (Optional)
+rejectedLabelDecorationType: { after: { contentText: ' ❌ Rejected (Shadow)', color: 'red' } }
+Logic:
+updateDecorations(editor):
+Get instructions from 
+ReviewProvider
+.
+Find ranges in editor.document.
+Apply decorations to ranges corresponding to Rejected IDs.
+[MODIFY] 
+src/reviewProvider.ts
+Add method getInstructions(): returns current list.
+Stable ID Matching:
+The 
+parseToInstructions
+ logic needs to store the Range (StartLine, EndLine) of the instruction in the source text (chat.txt).
+PenterInstruction
+ interface needs sourceLineStart, sourceLineEnd.
+UX / Logic Goals
+Opened Project: Just a list. Start point.
+New PR: User clicks -> Shadow Layer resets to match Project.
+Inline Review:
+CodeLens: Actionable buttons.
+Decorations:
+Rejected: Code block is greyed out/strikethrough. "❌ Rejected (Shadow)" label.
+Accepted: Default state.
+Accept/Reject: Updates Shadow instantly. Workspace untouched.

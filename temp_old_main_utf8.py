@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import shutil
 import json
@@ -208,7 +208,6 @@ class ConsoleWindow(QWidget):
         
         self.data["projects"][self.project_name]["selected_files"] = list(self.selected_files)
         print(f"[ConsoleWindow] Saving {len(self.selected_files)} selected files.")
-        save_data(self.data)
         self.close()
 
     def add_coped_project(self):
@@ -797,21 +796,19 @@ class EnterWindow(QWidget):
         # 3. Toggles (Row 2)
         # [selected file of source, selected file of shadow, different from source to coped]
         row2 = QHBoxLayout()
-        toggles = self.data["projects"][self.project_name].get("toggles", {})
-
         self.btn_toggle_src = QPushButton("Source Files")
         self.btn_toggle_src.setCheckable(True)
-        self.btn_toggle_src.setChecked(toggles.get("source", True))
+        self.btn_toggle_src.setChecked(True)
         self.btn_toggle_src.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
         
         self.btn_toggle_shadow = QPushButton("Shadow Files")
         self.btn_toggle_shadow.setCheckable(True)
-        self.btn_toggle_shadow.setChecked(toggles.get("shadow", True))
+        self.btn_toggle_shadow.setChecked(True)
         self.btn_toggle_shadow.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
         
         self.btn_toggle_diff = QPushButton("Diff (Source vs Coped)")
         self.btn_toggle_diff.setCheckable(True)
-        self.btn_toggle_diff.setChecked(toggles.get("diff", True))
+        self.btn_toggle_diff.setChecked(True)
         self.btn_toggle_diff.setStyleSheet("QPushButton:checked { background-color: #a0d0a0; }")
         
         row2.addWidget(self.btn_toggle_src)
@@ -899,9 +896,9 @@ class EnterWindow(QWidget):
     # Helpers for New Buttons
     # ------------------------
     def open_source_manager(self):
-        # Open ConsoleWindow (Old Version Restored)
-        self.console_win = ConsoleWindow(self.project_name, self.project_path, self.data)
-        self.console_win.show()
+        # Open ProjectChooseWindow for Source context
+        self.proj_choose = ProjectChooseWindow(self.project_name, self.project_path, self.data, context_key="source_context")
+        self.proj_choose.show()
 
     def open_shadow_manager_direct(self):
         # Open ProjectChooseWindow for Coped context
@@ -997,17 +994,6 @@ class EnterWindow(QWidget):
 
     def generate_chat(self):
         try:
-            # RELOAD DATA to ensure we have the latest 'selected_files' from ConsoleWindow
-            self.data = load_data() 
-            
-            # SAVE TOGGLES for Extension to use
-            self.data["projects"][self.project_name]["toggles"] = {
-                "source": self.btn_toggle_src.isChecked(),
-                "shadow": self.btn_toggle_shadow.isChecked(),
-                "diff": self.btn_toggle_diff.isChecked()
-            }
-            save_data(self.data)
-
             selected_files = self.data["projects"][self.project_name].get("selected_files", [])
             # Permissive: Allow generation even if no files are selected
             # if not selected_files:
