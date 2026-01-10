@@ -118,6 +118,12 @@
          "command": "aiCoder.toggleShadowDiff",
          "title": "Toggle Shadow Diff Highlights",
          "icon": "$(diff-multiple)"
+      },
+      },
+      {
+        "command": "aiCoder.selectDiffColorScheme",
+        "title": "Select Diff Color Scheme",
+        "icon": "$(symbol-color)"
       }
     ],
     "viewsContainers": {

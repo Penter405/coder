@@ -48,6 +48,7 @@ const penterDecorationProvider_1 = require("./penterDecorationProvider");
 const shadowDiffDecorationProvider_1 = require("./shadowDiffDecorationProvider");
 function activate(context) {
     console.log('AI Coder Helper is now active!');
+    console.log('[Extension] extensionPath: ' + context.extensionPath);
     vscode.window.showInformationMessage('AI Coder Helper is now active!');
     // Initialize the file tree provider
     const fileTreeProvider = new fileSelector_1.FileTreeProvider();
@@ -99,7 +100,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('aiCoder.diffShadow', (item) => {
         const leftUri = vscode.Uri.file(item.originalPath);
         const rightUri = vscode.Uri.file(item.shadowPath);
-        const title = `${path.basename(item.originalPath)} (Opened) ↔ (Shadow)`;
+        const title = `${path.basename(item.originalPath)} (Opened) ??(Shadow)`;
         if (fs.existsSync(item.originalPath)) {
             vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
         }
@@ -112,6 +113,17 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('aiCoder.toggleShadowDiff', () => {
         const enabled = shadowDiffProvider.toggle();
         vscode.window.showInformationMessage(`Shadow Diff Highlights: ${enabled ? 'ON' : 'OFF'}`);
+    }));
+    // Shadow Diff Color Scheme Selection
+    context.subscriptions.push(vscode.commands.registerCommand('aiCoder.selectDiffColorScheme', async () => {
+        const schemes = shadowDiffProvider.getColorSchemes();
+        const selected = await vscode.window.showQuickPick(schemes, {
+            placeHolder: 'Select a color scheme for diff highlighting'
+        });
+        if (selected) {
+            shadowDiffProvider.setColorScheme(selected);
+            vscode.window.showInformationMessage(`Color scheme: ${selected}`);
+        }
     }));
     // 3. New PR (Sync Shadow) - Handles Context Selection
     context.subscriptions.push(vscode.commands.registerCommand('aiCoder.newPR', async (item, nodes) => {
@@ -138,47 +150,29 @@ function activate(context) {
         if (!vscode.workspace.workspaceFolders)
             return;
         const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        // Resolve Project/Shadow Paths
-        const findDataJson = (startPath) => {
-            let current = startPath;
-            const rootAnchor = path.parse(startPath).root;
-            while (current !== rootAnchor) {
-                let candidate = path.join(current, 'file', 'data.json');
-                if (fs.existsSync(candidate))
-                    return candidate;
-                candidate = path.join(current, 'data.json');
-                current = path.dirname(current);
-                if (current === path.dirname(current))
-                    break;
-            }
-            return null;
-        };
-        let shadowBase = "";
-        let projectName = "Unknown";
-        let projectSourcePath = "";
+        // Use appRoot for reliable data.json location
+        const dataPath = path.join(appRoot, 'file', 'data.json');
+        console.log('[syncShadow] appRoot:', appRoot);
+        console.log('[syncShadow] dataPath:', dataPath);
+        let shadowBase = '';
+        let projectName = 'Unknown';
+        const projectSourcePath = root; // workspace is always the source
         try {
-            const dataPath = findDataJson(root);
-            if (dataPath && fs.existsSync(dataPath)) {
-                const dataContent = fs.readFileSync(dataPath, 'utf8');
-                const data = JSON.parse(dataContent);
+            if (fs.existsSync(dataPath)) {
+                const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
                 const currentProj = data.current_project;
                 if (currentProj) {
                     projectName = currentProj;
-                    const appRoot = path.dirname(path.dirname(dataPath));
                     shadowBase = path.join(appRoot, 'file', projectName, 'shadow');
-                    if (data.projects && data.projects[currentProj]) {
-                        projectSourcePath = data.projects[currentProj].path;
-                    }
+                    console.log('[syncShadow] project:', projectName, 'shadowBase:', shadowBase);
                 }
             }
         }
         catch (e) {
-            console.error(e);
+            console.error('[syncShadow] Error:', e);
         }
-        if (!projectSourcePath)
-            projectSourcePath = root;
         if (!shadowBase)
-            shadowBase = path.join(root, 'file', 'shadow');
+            shadowBase = path.join(appRoot, 'file', 'shadow');
         if (!fs.existsSync(projectSourcePath)) {
             vscode.window.showErrorMessage(`Source path not found: ${projectSourcePath}`);
             return;
@@ -260,7 +254,29 @@ function activate(context) {
         const confirm = await vscode.window.showWarningMessage(`Discard ${item.label}?`, 'Yes', 'No');
         if (confirm === 'Yes')
             await shadowProvider.discardFile(item);
-    }), vscode.commands.registerCommand('aiCoder.refreshFiles', () => fileTreeProvider.refresh()));
+    }), vscode.commands.registerCommand('aiCoder.refreshFiles', () => fileTreeProvider.refresh()), 
+    // Local PR: Merge all shadow files to opened project
+    vscode.commands.registerCommand('aiCoder.localPR', async () => {
+        vscode.window.showInformationMessage('Local PR: Merging all shadow changes...');
+    }), 
+    // Test Shadow
+    vscode.commands.registerCommand('aiCoder.testShadow', async (item) => {
+        if (item && item.shadowPath) {
+            const terminal = vscode.window.createTerminal('Shadow Test');
+            terminal.show();
+            terminal.sendText(`python "${item.shadowPath}"`);
+        }
+    }), 
+    // Apply All And Run
+    vscode.commands.registerCommand('aiCoder.applyAllAndRun', async () => {
+        vscode.window.showInformationMessage('Apply All & Run: Not implemented');
+    }), 
+    // Run Original
+    vscode.commands.registerCommand('aiCoder.runOriginal', async () => {
+        vscode.window.showInformationMessage('Run Original: Not implemented');
+    }), 
+    // Select/Deselect All
+    vscode.commands.registerCommand('aiCoder.selectAll', () => { vscode.window.showInformationMessage('Select All: Not implemented'); }), vscode.commands.registerCommand('aiCoder.deselectAll', () => { vscode.window.showInformationMessage('Deselect All: Not implemented'); }));
     // 6. Apply Changes (Re-implemented simplified logic)
     context.subscriptions.push(vscode.commands.registerCommand('aiCoder.applyChanges', async () => {
         let penterContent = '';

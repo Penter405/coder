@@ -2,39 +2,43 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-/**
- * Provides inline diff decorations for Shadow files.
- * Shows differences between Shadow and Opened project files using:
- * - Green background: Lines in Shadow but not in Opened (additions)
- * - Red inline text: Lines in Opened but not in Shadow (deletions)
- */
+// Color schemes for diff highlighting
+const COLOR_SCHEMES = {
+    default: {
+        added: 'rgba(40, 167, 69, 0.3)',      // Green
+        deleted: 'rgba(220, 53, 69, 0.3)'      // Red
+    },
+    pastel: {
+        added: 'rgba(152, 251, 152, 0.4)',     // Pale Green
+        deleted: 'rgba(255, 182, 193, 0.4)'    // Light Pink
+    },
+    vivid: {
+        added: 'rgba(0, 255, 0, 0.25)',        // Bright Green
+        deleted: 'rgba(255, 0, 0, 0.25)'       // Bright Red
+    },
+    blue_orange: {
+        added: 'rgba(100, 149, 237, 0.3)',     // Cornflower Blue
+        deleted: 'rgba(255, 165, 0, 0.3)'      // Orange
+    },
+    purple_yellow: {
+        added: 'rgba(147, 112, 219, 0.3)',     // Medium Purple
+        deleted: 'rgba(255, 255, 0, 0.3)'      // Yellow
+    }
+};
+
 export class ShadowDiffDecorationProvider {
     private appRoot: string;
     private enabled: boolean = false;
-
-    // Decoration types
-    private addedDecoration: vscode.TextEditorDecorationType;
-    private deletedDecoration: vscode.TextEditorDecorationType;
+    private colorScheme: string = 'default';
+    private addedDecoration!: vscode.TextEditorDecorationType;
+    private deletedDecoration!: vscode.TextEditorDecorationType;
 
     private disposables: vscode.Disposable[] = [];
 
     constructor(appRoot: string) {
         this.appRoot = appRoot;
+        this.createDecorations();
 
-        // Green for added lines
-        this.addedDecoration = vscode.window.createTextEditorDecorationType({
-            backgroundColor: 'rgba(40, 167, 69, 0.3)',  // Green
-            isWholeLine: true,
-            overviewRulerColor: 'rgba(40, 167, 69, 0.8)',
-            overviewRulerLane: vscode.OverviewRulerLane.Left
-        });
-
-        // Red for deleted lines header
-        this.deletedDecoration = vscode.window.createTextEditorDecorationType({
-            isWholeLine: false
-        });
-
-        // Listen for active editor changes
         this.disposables.push(
             vscode.window.onDidChangeActiveTextEditor(editor => {
                 if (editor && this.enabled) {
@@ -43,7 +47,6 @@ export class ShadowDiffDecorationProvider {
             })
         );
 
-        // Listen for document changes
         this.disposables.push(
             vscode.workspace.onDidChangeTextDocument(event => {
                 const editor = vscode.window.activeTextEditor;
@@ -52,6 +55,42 @@ export class ShadowDiffDecorationProvider {
                 }
             })
         );
+    }
+
+    private createDecorations() {
+        const scheme = COLOR_SCHEMES[this.colorScheme as keyof typeof COLOR_SCHEMES] || COLOR_SCHEMES.default;
+        
+        if (this.addedDecoration) this.addedDecoration.dispose();
+        if (this.deletedDecoration) this.deletedDecoration.dispose();
+
+        this.addedDecoration = vscode.window.createTextEditorDecorationType({
+            backgroundColor: scheme.added,
+            isWholeLine: true,
+            overviewRulerColor: scheme.added,
+            overviewRulerLane: vscode.OverviewRulerLane.Left
+        });
+
+        this.deletedDecoration = vscode.window.createTextEditorDecorationType({
+            backgroundColor: scheme.deleted,
+            isWholeLine: true,
+            overviewRulerColor: scheme.deleted,
+            overviewRulerLane: vscode.OverviewRulerLane.Right
+        });
+    }
+
+    setColorScheme(scheme: string) {
+        if (COLOR_SCHEMES[scheme as keyof typeof COLOR_SCHEMES]) {
+            this.colorScheme = scheme;
+            this.createDecorations();
+            const editor = vscode.window.activeTextEditor;
+            if (editor && this.enabled) {
+                this.updateDecorations(editor);
+            }
+        }
+    }
+
+    getColorSchemes(): string[] {
+        return Object.keys(COLOR_SCHEMES);
     }
 
     toggle(): boolean {
@@ -86,9 +125,7 @@ export class ShadowDiffDecorationProvider {
                     return path.join(this.appRoot, 'file', currentProj, 'shadow');
                 }
             }
-        } catch (e) {
-            console.error('[ShadowDiffDecorationProvider] Error reading data.json:', e);
-        }
+        } catch (e) {}
         return path.join(this.appRoot, 'file', 'shadow');
     }
 
@@ -99,13 +136,64 @@ export class ShadowDiffDecorationProvider {
                 const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
                 const currentProj = data.current_project;
                 if (currentProj && data.projects && data.projects[currentProj]) {
-                    return data.projects[currentProj].path;
+                    const projectInfo = data.projects[currentProj];
+                    let ideContext = projectInfo.ide_context || projectInfo.path || '';
+                    if (ideContext && !path.isAbsolute(ideContext)) {
+                        ideContext = path.join(this.appRoot, ideContext);
+                    }
+                    return ideContext;
                 }
             }
-        } catch (e) {
-            console.error('[ShadowDiffDecorationProvider] Error getting project path:', e);
-        }
+        } catch (e) {}
         return '';
+    }
+
+    // Line-by-line diff algorithm
+    private computeDiff(openedLines: string[], shadowLines: string[]): { added: number[]; deleted: { lineNum: number; content: string }[] } {
+        const added: number[] = [];
+        const deleted: { lineNum: number; content: string }[] = [];
+
+        // Use LCS-like approach for better accuracy
+        let oi = 0; // opened index
+        let si = 0; // shadow index
+
+        while (oi < openedLines.length || si < shadowLines.length) {
+            if (oi >= openedLines.length) {
+                // Remaining shadow lines are additions
+                added.push(si);
+                si++;
+            } else if (si >= shadowLines.length) {
+                // Remaining opened lines are deletions
+                deleted.push({ lineNum: si > 0 ? si - 1 : 0, content: openedLines[oi] });
+                oi++;
+            } else if (openedLines[oi] === shadowLines[si]) {
+                // Lines match, move both
+                oi++;
+                si++;
+            } else {
+                // Lines differ - check if opened line exists later in shadow
+                const futureInShadow = shadowLines.slice(si + 1).indexOf(openedLines[oi]);
+                const futureInOpened = openedLines.slice(oi + 1).indexOf(shadowLines[si]);
+
+                if (futureInShadow >= 0 && (futureInOpened < 0 || futureInShadow <= futureInOpened)) {
+                    // Shadow line is new (addition)
+                    added.push(si);
+                    si++;
+                } else if (futureInOpened >= 0) {
+                    // Opened line was deleted
+                    deleted.push({ lineNum: si, content: openedLines[oi] });
+                    oi++;
+                } else {
+                    // Both lines are different - shadow is added, opened is deleted
+                    added.push(si);
+                    deleted.push({ lineNum: si, content: openedLines[oi] });
+                    oi++;
+                    si++;
+                }
+            }
+        }
+
+        return { added, deleted };
     }
 
     updateDecorations(editor: vscode.TextEditor) {
@@ -114,16 +202,12 @@ export class ShadowDiffDecorationProvider {
         const filePath = editor.document.uri.fsPath;
         const shadowRoot = this.getShadowRoot();
 
-        // Check if this file is in the shadow directory
         if (!filePath.startsWith(shadowRoot)) {
             this.clearDecorations(editor);
             return;
         }
 
-        // Get relative path from shadow root
         const relativePath = path.relative(shadowRoot, filePath);
-
-        // Get corresponding opened project file
         const openedProjectPath = this.getOpenedProjectPath();
         if (!openedProjectPath) {
             this.clearDecorations(editor);
@@ -132,8 +216,8 @@ export class ShadowDiffDecorationProvider {
 
         const openedFilePath = path.join(openedProjectPath, relativePath);
 
-        // If opened file doesn't exist, entire shadow file is "added"
         if (!fs.existsSync(openedFilePath)) {
+            // All shadow lines are additions
             const allLines: vscode.DecorationOptions[] = [];
             for (let i = 0; i < editor.document.lineCount; i++) {
                 allLines.push({ range: new vscode.Range(i, 0, i, Number.MAX_VALUE) });
@@ -143,7 +227,6 @@ export class ShadowDiffDecorationProvider {
             return;
         }
 
-        // Read opened file
         let openedLines: string[];
         try {
             openedLines = fs.readFileSync(openedFilePath, 'utf8').split(/\r?\n/);
@@ -152,53 +235,41 @@ export class ShadowDiffDecorationProvider {
             return;
         }
 
-        // Get shadow lines
         const shadowLines: string[] = [];
         for (let i = 0; i < editor.document.lineCount; i++) {
             shadowLines.push(editor.document.lineAt(i).text);
         }
 
-        // Diff results
-        const addedRanges: vscode.DecorationOptions[] = [];
-        const deletedDecorations: vscode.DecorationOptions[] = [];
+        // Use proper line-by-line diff
+        const diff = this.computeDiff(openedLines, shadowLines);
 
-        // Create sets for quick lookup
-        const openedSet = new Set(openedLines);
-        const shadowSet = new Set(shadowLines);
+        // Create decorations
+        const addedRanges: vscode.DecorationOptions[] = diff.added.map(lineNum => ({
+            range: new vscode.Range(lineNum, 0, lineNum, Number.MAX_VALUE)
+        }));
 
-        // Check each shadow line for additions (GREEN)
-        for (let i = 0; i < shadowLines.length; i++) {
-            const line = shadowLines[i];
-            if (!openedSet.has(line)) {
-                addedRanges.push({ range: new vscode.Range(i, 0, i, Number.MAX_VALUE) });
+        // For deleted lines, show at the position where they would have been
+        const deletedRanges: vscode.DecorationOptions[] = [];
+        const deletedByLine = new Map<number, string[]>();
+        
+        for (const { lineNum, content } of diff.deleted) {
+            if (!deletedByLine.has(lineNum)) {
+                deletedByLine.set(lineNum, []);
             }
+            deletedByLine.get(lineNum)!.push(content);
         }
 
-        // Find deleted lines (RED) - lines in Opened but not in Shadow
-        const deletedLines = openedLines.filter(line => !shadowSet.has(line) && line.trim() !== '');
-
-        if (deletedLines.length > 0) {
-            // Show deleted lines as red text at the beginning of line 0
-            const deletedPreview = deletedLines.slice(0, 3).map(l => l.substring(0, 30)).join(' | ');
-            const moreText = deletedLines.length > 3 ? ` (+${deletedLines.length - 3} more)` : '';
-
-            deletedDecorations.push({
-                range: new vscode.Range(0, 0, 0, 0),
-                renderOptions: {
-                    before: {
-                        contentText: `⛔ DELETED: ${deletedPreview}${moreText} `,
-                        color: '#dc3545',
-                        backgroundColor: 'rgba(220, 53, 69, 0.2)',
-                        fontStyle: 'italic',
-                        textDecoration: 'line-through'
-                    }
-                },
-                hoverMessage: new vscode.MarkdownString(`**Deleted lines (${deletedLines.length}):**\n\`\`\`\n${deletedLines.join('\n')}\n\`\`\``)
+        for (const [lineNum, contents] of deletedByLine) {
+            const safeLineNum = Math.min(lineNum, editor.document.lineCount - 1);
+            const hoverText = contents.join('\n');
+            deletedRanges.push({
+                range: new vscode.Range(safeLineNum, 0, safeLineNum, Number.MAX_VALUE),
+                hoverMessage: new vscode.MarkdownString(`** Deleted (${contents.length}):**\n\`\`\`\n${hoverText}\n\`\`\``)
             });
         }
 
         editor.setDecorations(this.addedDecoration, addedRanges);
-        editor.setDecorations(this.deletedDecoration, deletedDecorations);
+        editor.setDecorations(this.deletedDecoration, deletedRanges);
     }
 
     dispose() {
