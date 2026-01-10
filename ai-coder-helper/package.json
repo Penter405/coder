@@ -107,18 +107,17 @@
         "icon": "$(git-pull-request)"
       },
       {
-         "command": "aiCoder.acceptInstructionInline",
-         "title": "Accept Instruction (Inline)"
+        "command": "aiCoder.acceptInstructionInline",
+        "title": "Accept Instruction (Inline)"
       },
       {
-         "command": "aiCoder.rejectInstructionInline",
-         "title": "Reject Instruction (Inline)"
+        "command": "aiCoder.rejectInstructionInline",
+        "title": "Reject Instruction (Inline)"
       },
       {
-         "command": "aiCoder.toggleShadowDiff",
-         "title": "Toggle Shadow Diff Highlights",
-         "icon": "$(diff-multiple)"
-      },
+        "command": "aiCoder.toggleShadowDiff",
+        "title": "Toggle Shadow Diff Highlights",
+        "icon": "$(diff-multiple)"
       },
       {
         "command": "aiCoder.selectDiffColorScheme",
@@ -240,6 +239,31 @@
           "command": "aiCoder.discardShadow",
           "when": "view == aiCoderShadow && viewItem == shadowFile",
           "group": "inline@4"
+        },
+        {
+          "command": "aiCoder.localPR",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "context@1"
+        },
+        {
+          "command": "aiCoder.localPR",
+          "when": "view == aiCoderShadow && viewItem == shadowFolder",
+          "group": "context@1"
+        },
+        {
+          "command": "aiCoder.diffShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "context@2"
+        },
+        {
+          "command": "aiCoder.discardShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFile",
+          "group": "context@3"
+        },
+        {
+          "command": "aiCoder.discardShadow",
+          "when": "view == aiCoderShadow && viewItem == shadowFolder",
+          "group": "context@3"
         }
       ],
       "editor/title": [

@@ -177,8 +177,10 @@ class ShadowTreeProvider {
                     console.log('[ShadowTreeProvider] Wrote file:', item.originalPath);
                 }
                 fs.unlinkSync(item.shadowPath);
-                this.refresh();
-                vscode.window.showInformationMessage(`Merged ${path.basename(item.originalPath)}`);
+                // Clean up empty parent folders in shadow
+                this.cleanupEmptyFolders(path.dirname(item.shadowPath));
+                // Don't show individual message for batch operations
+                // vscode.window.showInformationMessage(`Merged ${path.basename(item.originalPath)}`);
             }
         }
         catch (e) {
@@ -190,12 +192,33 @@ class ShadowTreeProvider {
         try {
             if (fs.existsSync(item.shadowPath)) {
                 fs.unlinkSync(item.shadowPath);
+                this.cleanupEmptyFolders(path.dirname(item.shadowPath));
                 vscode.window.showInformationMessage(`Discarded shadow copy of ${path.basename(item.originalPath)}`);
                 this.refresh();
             }
         }
         catch (e) {
             vscode.window.showErrorMessage(`Discard failed: ${e}`);
+        }
+    }
+    cleanupEmptyFolders(folderPath) {
+        // Don't delete beyond shadowRoot
+        if (!folderPath.startsWith(this.shadowRoot) || folderPath === this.shadowRoot) {
+            return;
+        }
+        try {
+            if (fs.existsSync(folderPath)) {
+                const entries = fs.readdirSync(folderPath);
+                if (entries.length === 0) {
+                    fs.rmdirSync(folderPath);
+                    console.log('[ShadowTreeProvider] Removed empty folder:', folderPath);
+                    // Recursively check parent
+                    this.cleanupEmptyFolders(path.dirname(folderPath));
+                }
+            }
+        }
+        catch (e) {
+            console.error('[ShadowTreeProvider] cleanupEmptyFolders error:', e);
         }
     }
 }

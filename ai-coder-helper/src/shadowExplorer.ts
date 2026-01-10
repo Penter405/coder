@@ -69,16 +69,16 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
 
                 if (currentProj && data.projects && data.projects[currentProj]) {
                     this.shadowRoot = path.normalize(path.join(this.appRoot, 'file', currentProj, 'shadow'));
-                    
+
                     // Get ide_context for merge target
                     const projectInfo = data.projects[currentProj];
                     this.ideContext = projectInfo.ide_context || projectInfo.path || '';
-                    
+
                     // If ide_context is relative, make it absolute
                     if (this.ideContext && !path.isAbsolute(this.ideContext)) {
                         this.ideContext = path.join(this.appRoot, this.ideContext);
                     }
-                    
+
                     console.log('[ShadowTreeProvider] shadowRoot:', this.shadowRoot);
                     console.log('[ShadowTreeProvider] ideContext (merge target):', this.ideContext);
 
@@ -106,7 +106,7 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
 
     async getChildren(element?: ShadowFileItem): Promise<ShadowFileItem[]> {
         console.log('[ShadowTreeProvider] getChildren called');
-        
+
         if (!this.shadowRoot || !fs.existsSync(this.shadowRoot)) {
             console.log('[ShadowTreeProvider] shadowRoot missing or does not exist');
             return [];
@@ -125,9 +125,9 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
 
                 const shadowPath = path.join(searchDir, entry.name);
                 const relative = path.relative(this.shadowRoot, shadowPath);
-                
+
                 // Use ideContext as the merge target base path
-                const originalPath = this.ideContext 
+                const originalPath = this.ideContext
                     ? path.join(this.ideContext, relative)
                     : shadowPath;
 
@@ -159,16 +159,16 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
         console.log('[ShadowTreeProvider] mergeFile called');
         console.log('[ShadowTreeProvider] shadowPath:', item.shadowPath);
         console.log('[ShadowTreeProvider] originalPath (target):', item.originalPath);
-        
+
         try {
             if (fs.existsSync(item.shadowPath)) {
                 const content = fs.readFileSync(item.shadowPath, 'utf8');
                 const targetDir = path.dirname(item.originalPath);
-                
+
                 if (!fs.existsSync(targetDir)) {
                     fs.mkdirSync(targetDir, { recursive: true });
                 }
-                
+
                 if (content.trim() === "__DELETED__") {
                     if (fs.existsSync(item.originalPath)) {
                         fs.unlinkSync(item.originalPath);
@@ -178,10 +178,14 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
                     fs.writeFileSync(item.originalPath, content, 'utf8');
                     console.log('[ShadowTreeProvider] Wrote file:', item.originalPath);
                 }
-                
+
                 fs.unlinkSync(item.shadowPath);
-                this.refresh();
-                vscode.window.showInformationMessage(`Merged ${path.basename(item.originalPath)}`);
+
+                // Clean up empty parent folders in shadow
+                this.cleanupEmptyFolders(path.dirname(item.shadowPath));
+
+                // Don't show individual message for batch operations
+                // vscode.window.showInformationMessage(`Merged ${path.basename(item.originalPath)}`);
             }
         } catch (e) {
             vscode.window.showErrorMessage(`Merge failed: ${e}`);
@@ -193,11 +197,33 @@ export class ShadowTreeProvider implements vscode.TreeDataProvider<ShadowFileIte
         try {
             if (fs.existsSync(item.shadowPath)) {
                 fs.unlinkSync(item.shadowPath);
+                this.cleanupEmptyFolders(path.dirname(item.shadowPath));
                 vscode.window.showInformationMessage(`Discarded shadow copy of ${path.basename(item.originalPath)}`);
                 this.refresh();
             }
         } catch (e) {
             vscode.window.showErrorMessage(`Discard failed: ${e}`);
+        }
+    }
+
+    private cleanupEmptyFolders(folderPath: string) {
+        // Don't delete beyond shadowRoot
+        if (!folderPath.startsWith(this.shadowRoot) || folderPath === this.shadowRoot) {
+            return;
+        }
+
+        try {
+            if (fs.existsSync(folderPath)) {
+                const entries = fs.readdirSync(folderPath);
+                if (entries.length === 0) {
+                    fs.rmdirSync(folderPath);
+                    console.log('[ShadowTreeProvider] Removed empty folder:', folderPath);
+                    // Recursively check parent
+                    this.cleanupEmptyFolders(path.dirname(folderPath));
+                }
+            }
+        } catch (e) {
+            console.error('[ShadowTreeProvider] cleanupEmptyFolders error:', e);
         }
     }
 }

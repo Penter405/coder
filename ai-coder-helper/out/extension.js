@@ -61,7 +61,11 @@ function activate(context) {
     // Shadow Explorer - pass appRoot for reliable data.json location
     const appRoot = path.dirname(context.extensionPath);
     const shadowProvider = new shadowExplorer_1.ShadowTreeProvider(appRoot);
-    vscode.window.registerTreeDataProvider('aiCoderShadow', shadowProvider);
+    const shadowTreeView = vscode.window.createTreeView('aiCoderShadow', {
+        treeDataProvider: shadowProvider,
+        canSelectMany: true,
+        showCollapseAll: true
+    });
     // Shadow Diff Decoration Provider
     const shadowDiffProvider = new shadowDiffDecorationProvider_1.ShadowDiffDecorationProvider(appRoot);
     context.subscriptions.push({ dispose: () => shadowDiffProvider.dispose() });
@@ -255,9 +259,63 @@ function activate(context) {
         if (confirm === 'Yes')
             await shadowProvider.discardFile(item);
     }), vscode.commands.registerCommand('aiCoder.refreshFiles', () => fileTreeProvider.refresh()), 
-    // Local PR: Merge all shadow files to opened project
+    // Local PR: Merge selected or all shadow files to opened project
     vscode.commands.registerCommand('aiCoder.localPR', async () => {
-        vscode.window.showInformationMessage('Local PR: Merging all shadow changes...');
+        try {
+            let filesToMerge = [];
+            // Helper function to recursively collect files
+            const collectAllFiles = async (items) => {
+                const allFiles = [];
+                for (const i of items) {
+                    if (i.isDirectory) {
+                        const children = await shadowProvider.getChildren(i);
+                        allFiles.push(...await collectAllFiles(children));
+                    }
+                    else {
+                        allFiles.push(i);
+                    }
+                }
+                return allFiles;
+            };
+            // Use TreeView selection for multi-select (Shift/Ctrl click)
+            const selectedItems = shadowTreeView.selection;
+            if (selectedItems && selectedItems.length > 0) {
+                filesToMerge = await collectAllFiles([...selectedItems]);
+            }
+            // No selection: merge all
+            else {
+                vscode.window.showInformationMessage('Local PR: Merging all shadow changes...');
+                const rootItems = await shadowProvider.getChildren();
+                filesToMerge = await collectAllFiles(rootItems);
+            }
+            if (filesToMerge.length === 0) {
+                vscode.window.showWarningMessage('No shadow files to merge.');
+                return;
+            }
+            let successCount = 0;
+            let errorCount = 0;
+            for (const file of filesToMerge) {
+                try {
+                    await shadowProvider.mergeFile(file);
+                    successCount++;
+                }
+                catch (e) {
+                    console.error('[localPR] Error merging file:', file.shadowPath, e);
+                    errorCount++;
+                }
+            }
+            if (errorCount > 0) {
+                vscode.window.showWarningMessage(`Local PR completed: ${successCount} merged, ${errorCount} failed.`);
+            }
+            else {
+                vscode.window.showInformationMessage(`Local PR completed: ${successCount} file(s) merged successfully!`);
+            }
+            shadowProvider.refresh();
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Local PR failed: ${e}`);
+            console.error('[localPR] Error:', e);
+        }
     }), 
     // Test Shadow
     vscode.commands.registerCommand('aiCoder.testShadow', async (item) => {
