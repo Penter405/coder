@@ -1,6 +1,10 @@
 # Coder 
 本專案將提升你與LLM語言模型中，全端開發的效率
 ## 使用指南
+下載模組
+```
+pip install pyqt6
+```
 初始化檔案---[init.py](https://github.com/Penter405/coder/blob/main/init.py)
 ```
 python init.py
