@@ -61,11 +61,14 @@ export class ShadowDiffDecorationProvider {
             backgroundColor: scheme.added,
             isWholeLine: true,
             overviewRulerColor: scheme.added,
-            overviewRulerLane: vscode.OverviewRulerLane.Left
+            overviewRulerLane: vscode.OverviewRulerLane.Left,
+            gutterIconPath: undefined,
+            gutterIconSize: 'contain'
         });
 
-        // Red for deleted lines (shows as virtual text)
+        // Red for deleted lines - use gutter icon and strikethrough style
         this.deletedDecoration = vscode.window.createTextEditorDecorationType({
+            backgroundColor: scheme.deleted,
             isWholeLine: true,
             overviewRulerColor: scheme.deleted,
             overviewRulerLane: vscode.OverviewRulerLane.Right
@@ -226,9 +229,8 @@ export class ShadowDiffDecorationProvider {
             range: new vscode.Range(lineNum, 0, lineNum, Number.MAX_VALUE)
         }));
 
-        // Deleted lines (Red)
-        const deletedRangesBefore: vscode.DecorationOptions[] = [];
-        const deletedRangesAfter: vscode.DecorationOptions[] = [];
+        // Deleted lines (Red) - show each deleted line separately
+        const deletedRanges: vscode.DecorationOptions[] = [];
         const scheme = COLOR_SCHEMES[this.colorScheme as keyof typeof COLOR_SCHEMES] || COLOR_SCHEMES.default;
 
         const deletedByLine = new Map<number, string[]>();
@@ -238,48 +240,32 @@ export class ShadowDiffDecorationProvider {
         }
 
         deletedByLine.forEach((contents, lineNum) => {
-            // Prepare content with preserved indentation (using NBSP)
-            const fixedContents = contents.map(line => {
-                // Replace spaces with non-breaking spaces to preserve indentation
-                const preservedLine = line.replace(/ /g, '\u00a0');
-                // Ensure we have some content
-                return preservedLine.length === 0 ? '\u00a0' : preservedLine;
-            });
+            // Show each deleted line in its own red box
+            const targetLine = Math.min(lineNum, editor.document.lineCount - 1);
+            if (targetLine >= 0) {
+                // Build multi-line display: each deleted line on its own "virtual line"
+                // Using NBSP and spacing to simulate line breaks
+                let displayLines = contents.map((line, idx) => {
+                    const trimmedLine = line.length > 50 ? line.substring(0, 50) + '...' : line;
+                    // Replace spaces with NBSP for proper display
+                    const fixedLine = trimmedLine.replace(/ /g, '\u00a0') || '\u00a0';
+                    return `⊖ ${fixedLine}`;
+                });
 
-            // Determines whether to use 'after' (previous line) or 'before' (current line)
-            // Using 'after' on the previous line is generally safer to avoid merging with the current line's background.
-            if (lineNum > 0) {
-                // Try to attach to previous line
-                let targetLineIndex = lineNum - 1;
+                // Join with special separator that creates visual line breaks
+                const displayText = '  ' + displayLines.join('  │  ');
 
-                // If previous line exists, use 'after'
-                const virtualText = '\n' + fixedContents.join('\n');
-                deletedRangesAfter.push({
-                    range: new vscode.Range(targetLineIndex, Number.MAX_VALUE, targetLineIndex, Number.MAX_VALUE),
+                deletedRanges.push({
+                    range: new vscode.Range(targetLine, Number.MAX_VALUE, targetLine, Number.MAX_VALUE),
                     renderOptions: {
                         after: {
-                            contentText: virtualText,
+                            contentText: displayText,
                             backgroundColor: scheme.deleted,
-                            color: 'rgba(150, 150, 150, 0.7)',
-                            margin: '0 0 0 0',
+                            color: '#ff6b6b',
+                            margin: '0 0 0 1em',
                             fontStyle: 'italic',
-                            fontWeight: 'normal'
-                        }
-                    }
-                });
-            } else {
-                // Line 0 case. Must use 'before' on Line 0 itself.
-                const virtualText = fixedContents.join('\n') + '\n';
-                deletedRangesBefore.push({
-                    range: new vscode.Range(0, 0, 0, 0),
-                    renderOptions: {
-                        before: {
-                            contentText: virtualText,
-                            backgroundColor: scheme.deleted,
-                            color: 'rgba(150, 150, 150, 0.7)',
-                            margin: '0 0 0 0',
-                            fontStyle: 'italic',
-                            fontWeight: 'normal'
+                            border: '1px solid rgba(255,107,107,0.5)',
+                            textDecoration: `; padding: 2px 8px; border-radius: 3px;`
                         }
                     }
                 });
@@ -287,10 +273,7 @@ export class ShadowDiffDecorationProvider {
         });
 
         editor.setDecorations(this.addedDecoration, addedRanges);
-
-        // Merge ranges
-        const allDeletedRanges = [...deletedRangesBefore, ...deletedRangesAfter];
-        editor.setDecorations(this.deletedDecoration, allDeletedRanges);
+        editor.setDecorations(this.deletedDecoration, deletedRanges);
     }
 
     dispose() {

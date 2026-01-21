@@ -51,55 +51,26 @@ class PenterCodeLensProvider {
         }
         const lenses = [];
         const instructions = this.reviewProvider.getInstructions();
-        // 1. Map Instructions to Document Ranges
-        // We rely on the source mappings captured during parsing.
-        // Assuming 'reviewProvider' holds instructions parsed *from* this document or similar content.
-        // Critical Issue: 'ReviewProvider' might have parsed content from Clipboard or Chat.txt 5 minutes ago.
-        // If the user edits chat.txt, the lines shift.
-        // However, 'reviewProvider' stores the *snapshot* of instructions currently being reviewed.
-        // We should try to show lenses based on *that* snapshot if possible.
-        // But CodeLens must point to valid lines in the *current* document.
-        // Strategy: We rely on the stored 'sourceLineStart'. 
-        // If the document has changed significantly, these might be misaligned.
-        // But since this is a "Review" session, we assume validity.
         for (const inst of instructions) {
-            // Create Range for the Lens
-            // We want it at the start of the instruction block
             const line = inst.sourceLineStart;
             if (line >= document.lineCount)
                 continue;
             const range = new vscode.Range(line, 0, line, 0);
-            // Command: Accept
+            // Always show both Accept and Reject buttons
             const cmdAccept = {
-                title: `$(check) Aspect [Accept]`,
+                title: `✅ Accept [${inst.action}]`,
                 command: 'aiCoder.acceptInstructionInline',
                 arguments: [inst.id],
-                tooltip: 'Apply this change to the Shadow Layer'
+                tooltip: `Apply this ${inst.action} instruction to Shadow Layer`
             };
-            // Command: Reject
             const cmdReject = {
-                title: `$(close) [Reject]`,
+                title: `❌ Reject`,
                 command: 'aiCoder.rejectInstructionInline',
                 arguments: [inst.id],
-                tooltip: 'Discard this change (Shadow Layer only)'
+                tooltip: 'Skip this instruction'
             };
-            // If Rejected, maybe show differently? 
-            // CodeLens title can change based on state!
-            if (this.reviewProvider.isAccepted(inst.id)) {
-                lenses.push(new vscode.CodeLens(range, cmdReject));
-                // Show "Accepted" state?
-                // Or toggle style: "Aspect [✔ Accepted] | [Reject]"
-                // Let's show both, but maybe indicate state in title.
-                // Better: "Aspect: [✔ Accept]  [Trash]"?
-                // For now: "Aspect [Accept] [Reject]" is standard.
-                // let's add both.
-                lenses.push(new vscode.CodeLens(range, cmdAccept));
-            }
-            else {
-                // It is Rejected.
-                lenses.push(new vscode.CodeLens(range, { ...cmdReject, title: `$(circle-slash) Rejected` }));
-                lenses.push(new vscode.CodeLens(range, { ...cmdAccept, title: `[Re-Accept]` }));
-            }
+            lenses.push(new vscode.CodeLens(range, cmdAccept));
+            lenses.push(new vscode.CodeLens(range, cmdReject));
         }
         return lenses;
     }

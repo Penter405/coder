@@ -42,15 +42,28 @@ class ConsoleWindow(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.data = data
-        # Load selected_files and resolve relative paths to absolute
-        raw_files = self.data["projects"][self.project_name].get("selected_files", [])
+        # Load selected_files from all sections (origin + coped)
         self.selected_files = set()
-        for f in raw_files:
+        
+        # Load from origin
+        origin_files = self.data["projects"][self.project_name].get("origin", {}).get("selected_files", [])
+        for f in origin_files:
             if os.path.isabs(f):
                 self.selected_files.add(os.path.normpath(f))
             else:
-                # Relative path - resolve from project_path
                 self.selected_files.add(os.path.normpath(os.path.join(self.project_path, f)))
+        
+        # Load from all coped projects
+        coped_dict = self.data["projects"][self.project_name].get("coped", {})
+        file_dir = os.path.join(SCRIPT_DIR, "file", self.project_name)
+        for coped_name, coped_data in coped_dict.items():
+            coped_path = os.path.join(file_dir, coped_name)
+            for f in coped_data.get("selected_files", []):
+                if os.path.isabs(f):
+                    self.selected_files.add(os.path.normpath(f))
+                else:
+                    self.selected_files.add(os.path.normpath(os.path.join(coped_path, f)))
+        
         self.updating = False
 
         self.setWindowTitle("Console - Manage Project & Files")
@@ -259,20 +272,100 @@ class ConsoleWindow(QWidget):
             self.collect_checked_files(parent_item.child(i))
 
     def apply_changes(self):
-        self.selected_files = set()
+        # Collect checked files categorized by section
+        self.origin_selected = set()
+        self.coped_selected = {}  # coped_name -> set of files
         
-        # Scan ALL top-level items (Origin and Coped Projects)
+        # Initialize coped_selected keys
+        file_dir = os.path.join(SCRIPT_DIR, "file", self.project_name)
+        coped_dict = self.data["projects"][self.project_name].get("coped", {})
+        for coped_name in coped_dict.keys():
+            self.coped_selected[coped_name] = set()
+        
+        # Scan ALL top-level items
         root_count = self.tree.topLevelItemCount()
         print(f"[ConsoleWindow] Scanning {root_count} roots for selection...")
         for i in range(root_count):
             root = self.tree.topLevelItem(i)
-            print(f"[ConsoleWindow] Scanning Root: {root.text(0)}")
-            self.collect_checked_files(root)
+            root_path = root.data(0, Qt.ItemDataRole.UserRole)
+            print(f"[ConsoleWindow] Scanning Root: {root.text(0)} - Path: {root_path}")
+            self.collect_checked_files_by_section(root, root_path)
         
-        self.data["projects"][self.project_name]["selected_files"] = list(self.selected_files)
-        print(f"[ConsoleWindow] Saving {len(self.selected_files)} selected files.")
+        # Save to respective sections
+        # Origin
+        origin_list = []
+        for f in self.origin_selected:
+            try:
+                rel = os.path.relpath(f, self.project_path)
+                if not rel.startswith('..'):
+                    origin_list.append(rel)
+                else:
+                    origin_list.append(f)
+            except ValueError:
+                origin_list.append(f)
+        
+        if "origin" not in self.data["projects"][self.project_name]:
+            self.data["projects"][self.project_name]["origin"] = {}
+        self.data["projects"][self.project_name]["origin"]["selected_files"] = origin_list
+        
+        # Coped projects
+        if "coped" not in self.data["projects"][self.project_name]:
+            self.data["projects"][self.project_name]["coped"] = {}
+        
+        for coped_name, files in self.coped_selected.items():
+            coped_path = os.path.join(file_dir, coped_name)
+            coped_list = []
+            for f in files:
+                try:
+                    rel = os.path.relpath(f, coped_path)
+                    if not rel.startswith('..'):
+                        coped_list.append(rel)
+                    else:
+                        coped_list.append(f)
+                except ValueError:
+                    coped_list.append(f)
+            
+            if coped_name not in self.data["projects"][self.project_name]["coped"]:
+                self.data["projects"][self.project_name]["coped"][coped_name] = {}
+            self.data["projects"][self.project_name]["coped"][coped_name]["selected_files"] = coped_list
+        
+        total = len(self.origin_selected) + sum(len(v) for v in self.coped_selected.values())
+        print(f"[ConsoleWindow] Saving {total} selected files across sections.")
         save_data(self.data)
         self.close()
+    
+    def collect_checked_files_by_section(self, parent_item, root_path):
+        """Collect checked files and categorize them by section (origin or coped)"""
+        path = parent_item.data(0, Qt.ItemDataRole.UserRole)
+        file_dir = os.path.join(SCRIPT_DIR, "file", self.project_name)
+        
+        if path in ["ORIGIN_ROOT", "SHADOW_ROOT", "NONE_ROOT"]:
+            pass
+        elif os.path.isfile(path):
+            if parent_item.checkState(0) == Qt.CheckState.Checked and (parent_item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                abs_path = os.path.abspath(path)
+                
+                # Determine which section this file belongs to
+                if abs_path.startswith(os.path.abspath(file_dir)):
+                    # It's in a coped project
+                    rel_from_file = os.path.relpath(abs_path, file_dir)
+                    parts = rel_from_file.split(os.sep)
+                    if len(parts) >= 1:
+                        coped_name = parts[0]
+                        if coped_name in self.coped_selected:
+                            self.coped_selected[coped_name].add(abs_path)
+                            print(f"[ConsoleWindow] Added to coped '{coped_name}': {abs_path}")
+                        else:
+                            # New coped project not in data yet, add it
+                            self.coped_selected[coped_name] = {abs_path}
+                            print(f"[ConsoleWindow] Added to NEW coped '{coped_name}': {abs_path}")
+                else:
+                    # It's in origin
+                    self.origin_selected.add(abs_path)
+                    print(f"[ConsoleWindow] Added to origin: {abs_path}")
+        
+        for i in range(parent_item.childCount()):
+            self.collect_checked_files_by_section(parent_item.child(i), root_path)
 
     def add_coped_project(self):
         # Determine Source
@@ -342,36 +435,51 @@ class ConsoleWindow(QWidget):
 
                     shutil.copytree(source_path, new_path, ignore=ignore_patterns, dirs_exist_ok=True) # dirs_exist_ok because we makedirs above
 
-                    # Inherit Selection State
-                    # Find all currently selected files that are within the source_path
-                    current_selected = self.data["projects"][self.project_name].get("selected_files", [])
-                    new_selected = []
+                    # Register new coped project in data.json
+                    if "coped" not in self.data["projects"][self.project_name]:
+                        self.data["projects"][self.project_name]["coped"] = {}
+                    self.data["projects"][self.project_name]["coped"][safe_name] = {"selected_files": []}
                     
-                    # Normalize source path for comparison
+                    # Inherit Selection State from source section
+                    source_selected = []
+                    if os.path.abspath(source_path) == os.path.abspath(self.project_path):
+                        # Source is Origin
+                        source_selected = self.data["projects"][self.project_name].get("origin", {}).get("selected_files", [])
+                    else:
+                        # Source is another coped project
+                        source_coped_name = os.path.basename(source_path)
+                        source_selected = self.data["projects"][self.project_name].get("coped", {}).get(source_coped_name, {}).get("selected_files", [])
+                    
+                    # Map selected files to new coped project
+                    new_selected = []
                     abs_source = os.path.abspath(source_path)
                     
-                    for path in current_selected:
-                        abs_path = os.path.abspath(path)
-                        # Check if this selected file belongs to the source project we just copied
-                        if abs_path.startswith(abs_source):
-                            # Calculate relative path
-                            rel_path = os.path.relpath(abs_path, abs_source)
-                            # New path in the coped project
+                    for rel_path in source_selected:
+                        if os.path.isabs(rel_path):
+                            if rel_path.startswith(abs_source):
+                                inner_rel = os.path.relpath(rel_path, abs_source)
+                                new_file_path = os.path.join(new_path, inner_rel)
+                                if os.path.exists(new_file_path):
+                                    new_selected.append(inner_rel)
+                        else:
                             new_file_path = os.path.join(new_path, rel_path)
                             if os.path.exists(new_file_path):
-                                new_selected.append(new_file_path)
-                                
-                    # Extend the selected_files list with these new paths
-                    if new_selected:
-                        current_selected.extend(new_selected)
-                        # Remove duplicates just in case
-                        self.data["projects"][self.project_name]["selected_files"] = list(set(current_selected))
-                        save_data(self.data)
-                        # Update local set
-                        self.selected_files = set(self.data["projects"][self.project_name]["selected_files"])
+                                new_selected.append(rel_path)
+                    
+                    self.data["projects"][self.project_name]["coped"][safe_name]["selected_files"] = new_selected
+                    save_data(self.data)
+                    
+                    # Update local set
+                    for rel in new_selected:
+                        self.selected_files.add(os.path.normpath(os.path.join(new_path, rel)))
 
                     QMessageBox.information(self, "Success", f"Created '{safe_name}' from '{source_name}'.\nCopied {len(new_selected)} selections.")
                 else:
+                    # Empty project - still register in coped
+                    if "coped" not in self.data["projects"][self.project_name]:
+                        self.data["projects"][self.project_name]["coped"] = {}
+                    self.data["projects"][self.project_name]["coped"][safe_name] = {"selected_files": []}
+                    save_data(self.data)
                     QMessageBox.information(self, "Success", f"Created empty project '{safe_name}'.")
 
                 self.build_tree()
@@ -747,8 +855,27 @@ class ProjectChooseWindow(QWidget):
 
             if os.path.isdir(root_path):
                 files = sorted(os.listdir(root_path))
-                # Get selected files for visual marking
-                selected_set = set(self.data["projects"][self.project_name].get("selected_files", []))
+                # Get selected files for visual marking from ALL sections
+                selected_set = set()
+                
+                # Load from origin
+                origin_files = self.data["projects"][self.project_name].get("origin", {}).get("selected_files", [])
+                for f in origin_files:
+                    if os.path.isabs(f):
+                        selected_set.add(os.path.normpath(f))
+                    else:
+                        selected_set.add(os.path.normpath(os.path.join(self.project_path, f)))
+                
+                # Load from all coped projects
+                file_dir = os.path.join(SCRIPT_DIR, "file", self.project_name)
+                coped_dict = self.data["projects"][self.project_name].get("coped", {})
+                for coped_name, coped_data in coped_dict.items():
+                    coped_path = os.path.join(file_dir, coped_name)
+                    for f in coped_data.get("selected_files", []):
+                        if os.path.isabs(f):
+                            selected_set.add(os.path.normpath(f))
+                        else:
+                            selected_set.add(os.path.normpath(os.path.join(coped_path, f)))
                 
                 self.log(f"Found {len(files)} files in {root_path}")
                 for f in files:
@@ -760,7 +887,8 @@ class ProjectChooseWindow(QWidget):
                     item.setData(0, Qt.ItemDataRole.UserRole, full_path)
                     
                     # Visual: Color/Bold for selected
-                    if full_path in selected_set:
+                    norm_full_path = os.path.normpath(full_path)
+                    if norm_full_path in selected_set:
                         from PyQt6.QtGui import QColor, QFont, QBrush
                         # Use a brighter green
                         item.setForeground(0, QBrush(QColor("#00CD00"))) # Medium Spring Green / Bright Green
@@ -1071,11 +1199,29 @@ class EnterWindow(QWidget):
             }
             save_data(self.data)
 
-            selected_files = self.data["projects"][self.project_name].get("selected_files", [])
+            # Load selected_files from ALL sections (origin + coped)
+            selected_files = []
+            
+            # Load from origin
+            origin_files = self.data["projects"][self.project_name].get("origin", {}).get("selected_files", [])
+            for f in origin_files:
+                if os.path.isabs(f):
+                    selected_files.append(f)
+                else:
+                    selected_files.append(os.path.join(self.project_path, f))
+            
+            # Load from all coped projects
+            file_dir = os.path.join(SCRIPT_DIR, "file", self.project_name)
+            coped_dict = self.data["projects"][self.project_name].get("coped", {})
+            for coped_name, coped_data in coped_dict.items():
+                coped_path = os.path.join(file_dir, coped_name)
+                for f in coped_data.get("selected_files", []):
+                    if os.path.isabs(f):
+                        selected_files.append(f)
+                    else:
+                        selected_files.append(os.path.join(coped_path, f))
+            
             # Permissive: Allow generation even if no files are selected
-            # if not selected_files:
-            #     QMessageBox.warning(self, "Warning", "No files selected. Please select source files first.")
-            #     return
 
             # Determine Contexts (Ensure Absolute)
             # Track if contexts are explicitly set vs using defaults
@@ -1129,7 +1275,13 @@ class EnterWindow(QWidget):
             # Normalize selected_files to sets of absolute paths for easy checking
             abs_selected = set()
             for p in selected_files:
-                abs_p = os.path.abspath(p)
+                # Fix: Resolve relative paths from project_path, not current working directory
+                if os.path.isabs(p):
+                    abs_p = os.path.normpath(p)
+                else:
+                    # Relative path - resolve from project_path
+                    abs_p = os.path.normpath(os.path.join(self.project_path, p))
+                
                 # Safety check: Allow files under project_path OR under coder's file/ directory
                 rel_to_project = os.path.relpath(abs_p, self.project_path)
                 rel_to_file_dir = os.path.relpath(abs_p, os.path.join(script_dir, "file"))

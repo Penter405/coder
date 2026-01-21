@@ -123,6 +123,11 @@
         "command": "aiCoder.selectDiffColorScheme",
         "title": "Select Diff Color Scheme",
         "icon": "$(symbol-color)"
+      },
+      {
+        "command": "aiCoder.applyToShadow",
+        "title": "Apply Accepted to Shadow",
+        "icon": "$(run)"
       }
     ],
     "viewsContainers": {
@@ -187,6 +192,11 @@
           "command": "aiCoder.rejectAllInstructions",
           "when": "view == aiCoderReview",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiCoder.applyToShadow",
+          "when": "view == aiCoderReview",
+          "group": "navigation@3"
         },
         {
           "command": "aiCoder.applyAllAndRun",

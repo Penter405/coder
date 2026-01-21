@@ -60,7 +60,8 @@ export function activate(context: vscode.ExtensionContext) {
             const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
 
             try {
-                const chatContent = await chatGenerator.generateFromData(root);
+                // Pass appRoot so data.json is found in coder-main/file/data.json
+                const chatContent = await chatGenerator.generateFromData(root, appRoot);
 
                 // Copy to clipboard
                 await vscode.env.clipboard.writeText(chatContent);
@@ -336,47 +337,50 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('aiCoder.deselectAll', () => { vscode.window.showInformationMessage('Deselect All: Not implemented'); })
     );
 
-    // 6. Apply Changes (Re-implemented simplified logic)
+    // 6. Apply Changes (Fixed: Read from appRoot/file/chat.txt, proper shadow path, confirmation flow)
     context.subscriptions.push(
         vscode.commands.registerCommand('aiCoder.applyChanges', async () => {
             let penterContent = '';
             let source = '';
+            let projectName = 'Unknown';
 
-            if (vscode.workspace.workspaceFolders) {
-                const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const p = path.join(root, 'chat.txt'); // Look in root
-                if (fs.existsSync(p)) {
-                    const c = fs.readFileSync(p, 'utf8');
-                    const matches = c.match(/```\s*penter([\s\S]*?)```/gi);
-                    if (matches && matches.length > 0) {
-                        penterContent = matches[matches.length - 1];
-                        source = 'chat.txt';
-                    }
+            // Read data.json to get current project
+            const dataPath = path.join(appRoot, 'file', 'data.json');
+            try {
+                if (fs.existsSync(dataPath)) {
+                    const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+                    projectName = data.current_project || 'Unknown';
                 }
-                // Try file/chat.txt
-                const p2 = path.join(root, 'file', 'chat.txt');
-                if (!penterContent && fs.existsSync(p2)) {
-                    const c = fs.readFileSync(p2, 'utf8');
-                    const matches = c.match(/```\s*penter([\s\S]*?)```/gi);
-                    if (matches && matches.length > 0) {
-                        penterContent = matches[matches.length - 1];
-                        source = 'file/chat.txt';
-                    }
+            } catch (e) {
+                console.error('[applyChanges] Error reading data.json:', e);
+            }
+
+            // ONLY read from appRoot/file/chat.txt (forced location)
+            const chatPath = path.join(appRoot, 'file', 'chat.txt');
+            console.log('[applyChanges] Looking for chat.txt at:', chatPath);
+
+            if (fs.existsSync(chatPath)) {
+                const content = fs.readFileSync(chatPath, 'utf8');
+                const matches = content.match(/```\s*penter([\s\S]*?)```/gi);
+                if (matches && matches.length > 0) {
+                    penterContent = matches[matches.length - 1];
+                    source = 'file/chat.txt';
                 }
             }
 
+            // Fallback to clipboard only if chat.txt not found
             if (!penterContent) {
                 penterContent = await vscode.env.clipboard.readText();
                 source = 'Clipboard';
             }
 
             if (!penterContent) {
-                vscode.window.showWarningMessage("No Penter code found in chat.txt or Clipboard.");
+                vscode.window.showWarningMessage("No Penter code found in file/chat.txt or Clipboard.");
                 return;
             }
 
             if (!vscode.workspace.workspaceFolders) return;
-            const projectSourcePath = vscode.workspace.workspaceFolders[0].uri.fsPath; // Ideally from data.json but fallback ok
+            const projectSourcePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
             const instructions = changeApplier.parseToInstructions(penterContent, projectSourcePath);
 
             if (instructions.length === 0) {
@@ -384,47 +388,115 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const ans = await vscode.window.showInformationMessage(`Stage ${instructions.length} instructions from ${source}?`, 'Yes', 'No');
-            if (ans !== 'Yes') return;
+            // Show instructions for review
+            vscode.window.showInformationMessage(
+                `Found ${instructions.length} instructions from ${source}. Applying to Shadow...`
+            );
 
-            // 1. Sync
+            // Calculate correct shadow path: appRoot/file/{projectName}/shadow
+            const shadowBase = path.join(appRoot, 'file', projectName, 'shadow');
+            console.log('[applyChanges] Shadow base:', shadowBase);
+
+            // Ensure shadow directory exists
+            if (!fs.existsSync(shadowBase)) {
+                fs.mkdirSync(shadowBase, { recursive: true });
+            }
+
+            // Sync project to shadow FIRST (so we have a base to apply changes to)
             await vscode.commands.executeCommand('aiCoder.syncShadow');
 
-            // 2. Load Review
+            // Set shadow root BEFORE loading instructions
+            reviewProvider.setShadowRoot(shadowBase);
+
+            // Load instructions into Review panel
             reviewProvider.loadInstructions(instructions);
 
-            // 3. Apply to Shadow (Find shadow root)
-            // ... We rely on shadowProvider internal knowledge or recalculate.
-            // reviewProvider needs applyToShadowDir path.
-            // Quick hack: Use default shadow path or let user configure.
-            // We'll use file/shadow in workspace.
-            // Ideally we pass the one calculated in syncShadow.
-            // We can store it in extension context? Or re-calculate.
-            // We'll re-calculate simply.
-            const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            const shadowBase = path.join(root, 'file', 'shadow');
-            // Try to be smarter if possible, but for now this is the safest fallback.
+            // Apply ALL instructions to shadow immediately (user can reject to undo)
+            await reviewProvider.applyAllToShadow();
 
+            // Enable shadow diff highlighting
+            if (!shadowDiffProvider.isEnabled()) {
+                shadowDiffProvider.toggle();
+            }
+
+            // Get unique affected files and open shadow files (not diff view)
+            const affectedFiles = Array.from(new Set(instructions.map(i => i.filePath)));
+            for (const filePath of affectedFiles) {
+                // Calculate shadow file path
+                const relPath = path.relative(projectSourcePath, filePath);
+                const shadowFilePath = path.join(shadowBase, relPath);
+
+                if (fs.existsSync(shadowFilePath)) {
+                    // Open shadow file directly (with inline decorations)
+                    const shadowUri = vscode.Uri.file(shadowFilePath);
+                    await vscode.window.showTextDocument(shadowUri, { preview: false });
+                }
+            }
+
+            // Show info about next steps
+            vscode.window.showInformationMessage(
+                `✅ Applied ${instructions.length} instructions to Shadow. ` +
+                `Reject unwanted changes in 'Penter Review' panel.`
+            );
+
+            // Refresh shadow tree
+            vscode.commands.executeCommand('aiCoder.refreshShadow');
+        })
+    );
+
+    // 6.5 NEW: Apply Accepted Instructions to Shadow (explicit user action)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aiCoder.applyToShadow', async () => {
+            const instructions = reviewProvider.getInstructions();
+            if (instructions.length === 0) {
+                vscode.window.showWarningMessage('No instructions loaded. Run "Apply AI Changes" first.');
+                return;
+            }
+
+            // Get project name from data.json
+            let projectName = 'Unknown';
+            const dataPath = path.join(appRoot, 'file', 'data.json');
+            try {
+                if (fs.existsSync(dataPath)) {
+                    const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+                    projectName = data.current_project || 'Unknown';
+                }
+            } catch (e) {
+                console.error('[applyToShadow] Error:', e);
+            }
+
+            const shadowBase = path.join(appRoot, 'file', projectName, 'shadow');
+
+            // Sync first
+            await vscode.commands.executeCommand('aiCoder.syncShadow');
+
+            // Apply accepted instructions to shadow
             await reviewProvider.applyToShadowDir(shadowBase);
 
             vscode.commands.executeCommand('aiCoder.refreshShadow');
-            vscode.window.showInformationMessage("Applied to Shadow. Review changes now.");
+            vscode.window.showInformationMessage('✅ Applied accepted instructions to Shadow. Review changes and use Local PR to merge.');
         })
     );
 
     // 7. Review / CodeLens Commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('aiCoder.acceptInstructionInline', (id: number) => {
-            if (!reviewProvider.isAccepted(id)) reviewProvider.toggleInstruction(id);
+        vscode.commands.registerCommand('aiCoder.acceptInstructionInline', async (id: number) => {
+            // Accept: Apply to shadow and remove from list
+            await reviewProvider.acceptAndRemove(id);
         }),
         vscode.commands.registerCommand('aiCoder.rejectInstructionInline', (id: number) => {
-            if (reviewProvider.isAccepted(id)) reviewProvider.toggleInstruction(id);
+            // Reject: Remove from list without applying
+            reviewProvider.rejectAndRemove(id);
         }),
-        vscode.commands.registerCommand('aiCoder.acceptInstruction', (item: ReviewItem) => {
-            if (item.type === 'instruction') reviewProvider.toggleInstruction((item.data as any).id);
+        vscode.commands.registerCommand('aiCoder.acceptInstruction', async (item: ReviewItem) => {
+            if (item.type === 'instruction') {
+                await reviewProvider.acceptAndRemove((item.data as any).id);
+            }
         }),
         vscode.commands.registerCommand('aiCoder.rejectInstruction', (item: ReviewItem) => {
-            if (item.type === 'instruction') reviewProvider.toggleInstruction((item.data as any).id);
+            if (item.type === 'instruction') {
+                reviewProvider.rejectAndRemove((item.data as any).id);
+            }
         }),
         vscode.commands.registerCommand('aiCoder.acceptAllInstructions', () => reviewProvider.acceptAll()),
         vscode.commands.registerCommand('aiCoder.rejectAllInstructions', () => reviewProvider.rejectAll())

@@ -6,10 +6,12 @@ export class ChatGenerator {
 
     /**
      * Generate chat.txt content using data.json configuration (matching main.py logic)
+     * @param workspaceRoot - The VSCode workspace root (used to identify the project)
+     * @param appRoot - The app root directory where file/data.json is located (coder-main)
      */
-    async generateFromData(workspaceRoot: string): Promise<string> {
-        // 1. Read data.json
-        const dataPath = path.join(workspaceRoot, 'file', 'data.json');
+    async generateFromData(workspaceRoot: string, appRoot?: string): Promise<string> {
+        // 1. Read data.json from appRoot (default to workspaceRoot for backwards compatibility)
+        const dataPath = path.join(appRoot || workspaceRoot, 'file', 'data.json');
         if (!fs.existsSync(dataPath)) {
             // Fallback or Error
             return "// Error: file/data.json not found. Please manage project via AI Coder App.";

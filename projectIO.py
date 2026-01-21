@@ -43,8 +43,16 @@ def add_project():
         print(f"Project '{name}' already exists.")
         return
     os.makedirs(path, exist_ok=True)
-    # 將 selected_files 放在 project 裡
-    data["projects"][name] = {"path": os.path.abspath(path), "selected_files": []}
+    # New structure with origin/shadow/coped sections
+    data["projects"][name] = {
+        "path": os.path.abspath(path),
+        "origin": {"selected_files": []},
+        "shadow": {"selected_files": []},
+        "coped": {},
+        "source_context": "origin",
+        "coped_context": None,
+        "toggles": {"source": True, "shadow": False, "diff": False}
+    }
     data["current_project"] = name
     save_data(data)
     print(f"Project '{name}' added and set as current project.")

@@ -25,11 +25,10 @@ def init_file():
 
     # 初始化 data.json
     if not os.path.exists(DATA_FILE):
+        # New structure with separate origin/shadow/coped sections
         DEFAULT_DATA = {
             "projects": {},         # 所有專案資訊
-            "current_project": None, # 當前選擇的專案
-            "project_path": "file\\target",
-            "task_description": ""
+            "current_project": None # 當前選擇的專案
         }
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(DEFAULT_DATA, f, indent=2)
@@ -47,12 +46,6 @@ def init_file():
             changed = True
         if "current_project" not in data:
             data["current_project"] = None
-            changed = True
-        if "project_path" not in data:
-            data["project_path"] = "file\\target"
-            changed = True
-        if "task_description" not in data:
-            data["task_description"] = ""
             changed = True
 
         if changed:

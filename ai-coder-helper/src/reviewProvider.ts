@@ -67,10 +67,9 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
     public loadInstructions(insts: PenterInstruction[]) {
         this.instructions = insts;
         this.acceptedIds.clear();
-        // Default all accepted
-        insts.forEach(i => this.acceptedIds.add(i.id));
+        // DO NOT auto-accept, DO NOT auto-apply
+        // User must Accept each instruction individually
         this.refresh();
-        this.updateShadow();
     }
 
     public toggleInstruction(id: number) {
@@ -118,6 +117,85 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
         this.acceptedIds.clear();
         this.refresh();
         this.updateShadow();
+    }
+
+    /**
+     * Accept and remove: Apply single instruction to shadow, then remove from list
+     */
+    public async acceptAndRemove(id: number) {
+        const inst = this.instructions.find(i => i.id === id);
+        if (!inst) return;
+
+        // Apply this single instruction to shadow
+        if (this.shadowRoot) {
+            await this.applySingleInstruction(inst);
+        }
+
+        // Remove from list
+        this.instructions = this.instructions.filter(i => i.id !== id);
+        this.acceptedIds.delete(id);
+        this.refresh();
+
+        // Refresh shadow tree
+        vscode.commands.executeCommand('aiCoder.refreshShadow');
+    }
+
+    /**
+     * Reject and remove: Skip instruction, remove from list
+     */
+    public rejectAndRemove(id: number) {
+        // Just remove from list without applying
+        this.instructions = this.instructions.filter(i => i.id !== id);
+        this.acceptedIds.delete(id);
+        this.refresh();
+    }
+
+    /**
+     * Apply a single instruction to shadow
+     */
+    private async applySingleInstruction(inst: PenterInstruction) {
+        if (!this.shadowRoot) return;
+
+        const changes = this.applier.applyInstructions([inst]);
+
+        for (const change of changes) {
+            const relPath = path.relative(this.workspaceRoot, change.filePath);
+            const shadowFile = path.join(this.shadowRoot, relPath);
+            const shadowDir = path.dirname(shadowFile);
+
+            if (!fs.existsSync(shadowDir)) {
+                fs.mkdirSync(shadowDir, { recursive: true });
+            }
+
+            if (change.action === 'delete') {
+                if (change.content === '__RMDIR__') {
+                    if (fs.existsSync(shadowFile)) {
+                        fs.rmSync(shadowFile, { recursive: true, force: true });
+                    }
+                } else {
+                    if (fs.existsSync(shadowFile)) fs.unlinkSync(shadowFile);
+                }
+            } else {
+                if (change.content === '__MKDIR__') {
+                    if (!fs.existsSync(shadowFile)) {
+                        fs.mkdirSync(shadowFile, { recursive: true });
+                    }
+                } else {
+                    fs.writeFileSync(shadowFile, change.content, 'utf8');
+                }
+            }
+        }
+    }
+
+    /**
+     * Apply ALL instructions to shadow at once
+     */
+    public async applyAllToShadow() {
+        if (!this.shadowRoot) return;
+
+        for (const inst of this.instructions) {
+            await this.applySingleInstruction(inst);
+        }
     }
 
     public isAccepted(id: number): boolean {
