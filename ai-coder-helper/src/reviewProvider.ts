@@ -52,6 +52,8 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
 
     private instructions: PenterInstruction[] = [];
     private acceptedIds: Set<number> = new Set();
+    private rejectedIds: Set<number> = new Set(); // Track rejected instructions for offset calculation
+    private allOriginalInstructions: PenterInstruction[] = []; // Keep original instructions for rebuild
     private applier: ChangeApplier;
     private workspaceRoot: string;
 
@@ -66,7 +68,9 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
 
     public loadInstructions(insts: PenterInstruction[]) {
         this.instructions = insts;
+        this.allOriginalInstructions = [...insts]; // Keep a copy of all original instructions
         this.acceptedIds.clear();
+        this.rejectedIds.clear();
         // DO NOT auto-accept, DO NOT auto-apply
         // User must Accept each instruction individually
         this.refresh();
@@ -120,16 +124,15 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
     }
 
     /**
-     * Accept and remove: Apply single instruction to shadow, then remove from list
+     * Accept and remove: Just remove from pending list (changes are already in shadow)
+     * NOTE: applyAllToShadow has already applied all changes, so Accept = "keep the change"
      */
     public async acceptAndRemove(id: number) {
         const inst = this.instructions.find(i => i.id === id);
         if (!inst) return;
 
-        // Apply this single instruction to shadow
-        if (this.shadowRoot) {
-            await this.applySingleInstruction(inst);
-        }
+        // DO NOT re-apply! Changes are already in shadow from applyAllToShadow()
+        // Accept = "I want to keep this change" = just remove from pending list
 
         // Remove from list
         this.instructions = this.instructions.filter(i => i.id !== id);
@@ -141,60 +144,422 @@ export class ReviewProvider implements vscode.TreeDataProvider<ReviewItem> {
     }
 
     /**
-     * Reject and remove: Skip instruction, remove from list
+     * Reject and remove: Mark instruction as rejected, rebuild shadow with only active instructions
+     * This uses the "rebuild" approach to correctly handle offset adjustments
      */
-    public rejectAndRemove(id: number) {
-        // Just remove from list without applying
+    public async rejectAndRemove(id: number) {
+        const inst = this.instructions.find(i => i.id === id);
+        if (!inst) return;
+
+        // Add to rejected set (for offset calculation)
+        this.rejectedIds.add(id);
+
+        // Remove from pending list
         this.instructions = this.instructions.filter(i => i.id !== id);
         this.acceptedIds.delete(id);
+
+        // REBUILD: Sync shadow from original, then apply remaining instructions with offset adjustment
+        if (this.shadowRoot) {
+            await this.rebuildShadowWithActiveInstructions();
+        }
+
         this.refresh();
+        vscode.commands.executeCommand('aiCoder.refreshShadow');
     }
 
     /**
-     * Apply a single instruction to shadow
+     * Rebuild shadow from original and apply only active (non-rejected) instructions
+     * with correct offset adjustments
      */
-    private async applySingleInstruction(inst: PenterInstruction) {
+    private async rebuildShadowWithActiveInstructions() {
         if (!this.shadowRoot) return;
 
-        const changes = this.applier.applyInstructions([inst]);
+        // Step 1: Re-sync shadow from original (copy original files to shadow)
+        await vscode.commands.executeCommand('aiCoder.syncShadow');
 
-        for (const change of changes) {
-            const relPath = path.relative(this.workspaceRoot, change.filePath);
-            const shadowFile = path.join(this.shadowRoot, relPath);
-            const shadowDir = path.dirname(shadowFile);
+        // Step 2: Get active instructions (instructions still in the pending list)
+        const activeInstructions = this.instructions;
 
-            if (!fs.existsSync(shadowDir)) {
-                fs.mkdirSync(shadowDir, { recursive: true });
-            }
+        // Step 3: Apply active instructions with offset adjustment
+        await this.applyInstructionsWithOffset(activeInstructions);
+    }
 
-            if (change.action === 'delete') {
-                if (change.content === '__RMDIR__') {
-                    if (fs.existsSync(shadowFile)) {
-                        fs.rmSync(shadowFile, { recursive: true, force: true });
-                    }
-                } else {
-                    if (fs.existsSync(shadowFile)) fs.unlinkSync(shadowFile);
-                }
-            } else {
-                if (change.content === '__MKDIR__') {
-                    if (!fs.existsSync(shadowFile)) {
-                        fs.mkdirSync(shadowFile, { recursive: true });
-                    }
-                } else {
-                    fs.writeFileSync(shadowFile, change.content, 'utf8');
-                }
+    /**
+     * Apply instructions with offset adjustment based on rejected REMOVEs
+     */
+    private async applyInstructionsWithOffset(instructions: PenterInstruction[]) {
+        if (!this.shadowRoot) return;
+
+        // Group by file
+        const byFile = new Map<string, PenterInstruction[]>();
+        for (const inst of instructions) {
+            const key = inst.filePath;
+            if (!byFile.has(key)) byFile.set(key, []);
+            byFile.get(key)!.push(inst);
+        }
+
+        // Process each file
+        for (const [filePath, insts] of byFile) {
+            // Get rejected REMOVEs for this file (for offset calculation)
+            const rejectedRemoves = this.allOriginalInstructions.filter(i =>
+                i.filePath === filePath &&
+                i.action === 'REMOVE' &&
+                this.rejectedIds.has(i.id)
+            );
+
+            // Sort by descending line number
+            const sorted = [...insts].sort((a, b) => {
+                const getLine = (inst: PenterInstruction) => {
+                    if (inst.action === 'ADD') return inst.line || 0;
+                    if (inst.action === 'ADD_AFTER') return (inst.line || 0) + 1;
+                    if (inst.action === 'REMOVE') return inst.start || 0;
+                    return 0;
+                };
+                return getLine(b) - getLine(a);
+            });
+
+            // Apply each instruction with offset
+            for (const inst of sorted) {
+                const adjustedInst = this.adjustInstructionOffset(inst, rejectedRemoves);
+                await this.applySingleInstruction(adjustedInst);
             }
         }
     }
 
     /**
+     * Calculate and apply offset to an instruction based on rejected REMOVEs
+     * When a REMOVE is rejected, lines that would have been deleted are still present,
+     * so subsequent instructions need to shift their line numbers
+     */
+    private adjustInstructionOffset(inst: PenterInstruction, rejectedRemoves: PenterInstruction[]): PenterInstruction {
+        // Calculate offset: sum of lines that would have been removed by rejected REMOVEs
+        // that are at or before this instruction's target line
+        let offset = 0;
+        const instLine = inst.line || inst.start || 0;
+
+        for (const rem of rejectedRemoves) {
+            const remStart = rem.start || 1;
+            const remEnd = rem.end || remStart;
+            const linesNotRemoved = remEnd - remStart + 1;
+
+            // If this REMOVE was at or before our instruction's line, add offset
+            if (remStart <= instLine) {
+                offset += linesNotRemoved;
+            }
+        }
+
+        if (offset === 0) return inst; // No adjustment needed
+
+        // Create adjusted copy
+        const adjusted = { ...inst };
+        if (adjusted.line !== undefined) {
+            adjusted.line = adjusted.line + offset;
+        }
+        if (adjusted.start !== undefined) {
+            adjusted.start = adjusted.start + offset;
+        }
+        if (adjusted.end !== undefined) {
+            adjusted.end = adjusted.end + offset;
+        }
+
+        console.log(`[adjustInstructionOffset] ${inst.action} line ${instLine} -> ${instLine + offset} (offset: ${offset})`);
+        return adjusted;
+    }
+
+    /**
+     * Revert a single instruction from shadow (reverse operation)
+     * This is called when user clicks Reject to undo the already-applied change
+     */
+    private async revertSingleInstruction(inst: PenterInstruction) {
+        if (!this.shadowRoot) return;
+
+        const relPath = path.relative(this.workspaceRoot, inst.filePath);
+        const shadowFile = path.join(this.shadowRoot, relPath);
+
+        // Handle different actions - perform the REVERSE operation
+        switch (inst.action) {
+            case 'CREATE': {
+                // Reverse of CREATE = DELETE the file
+                if (fs.existsSync(shadowFile)) {
+                    fs.unlinkSync(shadowFile);
+                    console.log(`[revertSingleInstruction] Reverted CREATE (deleted): ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'DELETE': {
+                // Reverse of DELETE = Restore from original
+                // We need to copy from the original file
+                const originalFile = inst.filePath;
+                if (fs.existsSync(originalFile)) {
+                    const content = fs.readFileSync(originalFile, 'utf8');
+                    const shadowDir = path.dirname(shadowFile);
+                    if (!fs.existsSync(shadowDir)) {
+                        fs.mkdirSync(shadowDir, { recursive: true });
+                    }
+                    fs.writeFileSync(shadowFile, content, 'utf8');
+                    console.log(`[revertSingleInstruction] Reverted DELETE (restored): ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'ADD':
+            case 'ADD_AFTER': {
+                // Reverse of ADD = REMOVE the added lines
+                if (!fs.existsSync(shadowFile)) break;
+
+                let lines = fs.readFileSync(shadowFile, 'utf8').split(/\r?\n/);
+                const addedLineCount = inst.content ? inst.content.split(/\r?\n/).length : 0;
+
+                if (addedLineCount === 0) break;
+
+                // Calculate where the lines were inserted
+                let insertIdx: number;
+                if (inst.action === 'ADD') {
+                    insertIdx = Math.max(0, (inst.line || 1) - 1);
+                } else { // ADD_AFTER
+                    insertIdx = Math.min(inst.line || 1, lines.length);
+                }
+
+                // Remove the added lines
+                if (insertIdx < lines.length) {
+                    lines.splice(insertIdx, addedLineCount);
+                    fs.writeFileSync(shadowFile, lines.join('\n'), 'utf8');
+                    console.log(`[revertSingleInstruction] Reverted ${inst.action} (removed ${addedLineCount} lines at ${insertIdx}): ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'REMOVE': {
+                // Reverse of REMOVE = Restore the removed lines
+                // We need to get the original lines from the original file
+                const originalFile = inst.filePath;
+                if (!fs.existsSync(originalFile)) break;
+
+                const originalLines = fs.readFileSync(originalFile, 'utf8').split(/\r?\n/);
+                const startLine = inst.start || 1;
+                const endLine = inst.end || startLine;
+                const startIdx = Math.max(0, startLine - 1);
+                const count = Math.max(1, endLine - startLine + 1);
+
+                // Get the lines that were removed
+                const removedLines = originalLines.slice(startIdx, startIdx + count);
+
+                // Read current shadow and insert the lines back
+                let shadowLines: string[] = [];
+                if (fs.existsSync(shadowFile)) {
+                    shadowLines = fs.readFileSync(shadowFile, 'utf8').split(/\r?\n/);
+                }
+
+                // Insert at the original position (but clamped to current shadow length)
+                const insertAt = Math.min(startIdx, shadowLines.length);
+                shadowLines.splice(insertAt, 0, ...removedLines);
+                fs.writeFileSync(shadowFile, shadowLines.join('\n'), 'utf8');
+                console.log(`[revertSingleInstruction] Reverted REMOVE (restored ${count} lines at ${insertAt}): ${shadowFile}`);
+                break;
+            }
+
+            case 'MKDIR': {
+                // Reverse of MKDIR = RMDIR
+                if (fs.existsSync(shadowFile)) {
+                    try {
+                        fs.rmdirSync(shadowFile);
+                        console.log(`[revertSingleInstruction] Reverted MKDIR (removed dir): ${shadowFile}`);
+                    } catch (e) {
+                        console.warn(`[revertSingleInstruction] Could not remove dir (not empty?): ${shadowFile}`);
+                    }
+                }
+                break;
+            }
+
+            case 'RMDIR': {
+                // Reverse of RMDIR = MKDIR
+                if (!fs.existsSync(shadowFile)) {
+                    fs.mkdirSync(shadowFile, { recursive: true });
+                    console.log(`[revertSingleInstruction] Reverted RMDIR (created dir): ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'RENAME': {
+                // Reverse of RENAME = Rename back
+                if (inst.newPath) {
+                    const newRelPath = path.relative(this.workspaceRoot, inst.newPath);
+                    const newShadowFile = path.join(this.shadowRoot, newRelPath);
+
+                    if (fs.existsSync(newShadowFile)) {
+                        const shadowDir = path.dirname(shadowFile);
+                        if (!fs.existsSync(shadowDir)) {
+                            fs.mkdirSync(shadowDir, { recursive: true });
+                        }
+                        fs.renameSync(newShadowFile, shadowFile);
+                        console.log(`[revertSingleInstruction] Reverted RENAME: ${newShadowFile} -> ${shadowFile}`);
+                    }
+                }
+                break;
+            }
+
+            default:
+                console.warn(`[revertSingleInstruction] Unknown action: ${inst.action}`);
+        }
+    }
+
+    /**
+     * Apply a single instruction to shadow
+     * IMPORTANT: Reads from SHADOW file (not original) to ensure sequential changes work
+     */
+    private async applySingleInstruction(inst: PenterInstruction) {
+        if (!this.shadowRoot) return;
+
+        const relPath = path.relative(this.workspaceRoot, inst.filePath);
+        const shadowFile = path.join(this.shadowRoot, relPath);
+        const shadowDir = path.dirname(shadowFile);
+
+        // Ensure directory exists
+        if (!fs.existsSync(shadowDir)) {
+            fs.mkdirSync(shadowDir, { recursive: true });
+        }
+
+        // Handle different actions
+        switch (inst.action) {
+            case 'CREATE': {
+                // Create new file with content
+                const content = inst.content || '';
+                fs.writeFileSync(shadowFile, content, 'utf8');
+                console.log(`[applySingleInstruction] CREATE: ${shadowFile}`);
+                break;
+            }
+
+            case 'DELETE': {
+                if (fs.existsSync(shadowFile)) {
+                    fs.unlinkSync(shadowFile);
+                    console.log(`[applySingleInstruction] DELETE: ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'MKDIR': {
+                if (!fs.existsSync(shadowFile)) {
+                    fs.mkdirSync(shadowFile, { recursive: true });
+                    console.log(`[applySingleInstruction] MKDIR: ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'RMDIR': {
+                if (fs.existsSync(shadowFile)) {
+                    fs.rmSync(shadowFile, { recursive: true, force: true });
+                    console.log(`[applySingleInstruction] RMDIR: ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'ADD': {
+                // Read CURRENT shadow file content (not original!)
+                let lines: string[] = [];
+                if (fs.existsSync(shadowFile)) {
+                    lines = fs.readFileSync(shadowFile, 'utf8').split(/\r?\n/);
+                }
+
+                const lineNum = inst.line || 1;
+                const insertIdx = Math.max(0, Math.min(lineNum - 1, lines.length));
+                const newLines = inst.content ? inst.content.split(/\r?\n/) : [];
+
+                // Insert at line position
+                lines.splice(insertIdx, 0, ...newLines);
+                fs.writeFileSync(shadowFile, lines.join('\n'), 'utf8');
+                console.log(`[applySingleInstruction] ADD at line ${lineNum}: ${shadowFile}`);
+                break;
+            }
+
+            case 'ADD_AFTER': {
+                let lines: string[] = [];
+                if (fs.existsSync(shadowFile)) {
+                    lines = fs.readFileSync(shadowFile, 'utf8').split(/\r?\n/);
+                }
+
+                const lineNum = inst.line || 1;
+                const insertIdx = Math.min(lineNum, lines.length);
+                const newLines = inst.content ? inst.content.split(/\r?\n/) : [];
+
+                lines.splice(insertIdx, 0, ...newLines);
+                fs.writeFileSync(shadowFile, lines.join('\n'), 'utf8');
+                console.log(`[applySingleInstruction] ADD_AFTER line ${lineNum}: ${shadowFile}`);
+                break;
+            }
+
+            case 'REMOVE': {
+                if (!fs.existsSync(shadowFile)) break;
+
+                let lines = fs.readFileSync(shadowFile, 'utf8').split(/\r?\n/);
+                const startLine = inst.start || 1;
+                const endLine = inst.end || startLine;
+                const startIdx = Math.max(0, startLine - 1);
+                const count = Math.max(1, endLine - startLine + 1);
+
+                if (startIdx < lines.length) {
+                    lines.splice(startIdx, count);
+                    fs.writeFileSync(shadowFile, lines.join('\n'), 'utf8');
+                    console.log(`[applySingleInstruction] REMOVE lines ${startLine}-${endLine}: ${shadowFile}`);
+                }
+                break;
+            }
+
+            case 'RENAME': {
+                if (inst.newPath) {
+                    const newRelPath = path.relative(this.workspaceRoot, inst.newPath);
+                    const newShadowFile = path.join(this.shadowRoot, newRelPath);
+                    const newShadowDir = path.dirname(newShadowFile);
+
+                    if (!fs.existsSync(newShadowDir)) {
+                        fs.mkdirSync(newShadowDir, { recursive: true });
+                    }
+
+                    if (fs.existsSync(shadowFile)) {
+                        fs.renameSync(shadowFile, newShadowFile);
+                        console.log(`[applySingleInstruction] RENAME: ${shadowFile} -> ${newShadowFile}`);
+                    }
+                }
+                break;
+            }
+
+            default:
+                console.warn(`[applySingleInstruction] Unknown action: ${inst.action}`);
+        }
+    }
+
+    /**
      * Apply ALL instructions to shadow at once
+     * IMPORTANT: Sort instructions by descending line number per file to avoid line shift issues
      */
     public async applyAllToShadow() {
         if (!this.shadowRoot) return;
 
+        // Group instructions by file
+        const byFile = new Map<string, PenterInstruction[]>();
         for (const inst of this.instructions) {
-            await this.applySingleInstruction(inst);
+            const key = inst.filePath;
+            if (!byFile.has(key)) byFile.set(key, []);
+            byFile.get(key)!.push(inst);
+        }
+
+        // Process each file's instructions in sorted order
+        for (const [filePath, insts] of byFile) {
+            // Sort by descending line number to avoid line shift
+            // Higher line numbers first, so earlier edits don't affect later ones
+            const sorted = [...insts].sort((a, b) => {
+                const getLine = (inst: PenterInstruction) => {
+                    if (inst.action === 'ADD') return inst.line || 0;
+                    if (inst.action === 'ADD_AFTER') return (inst.line || 0) + 1;
+                    if (inst.action === 'REMOVE') return inst.start || 0;
+                    return 0; // CREATE, DELETE, etc. don't have line numbers
+                };
+                return getLine(b) - getLine(a); // Descending
+            });
+
+            for (const inst of sorted) {
+                await this.applySingleInstruction(inst);
+            }
         }
     }
 

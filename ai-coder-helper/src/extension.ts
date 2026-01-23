@@ -9,6 +9,7 @@ import { ReviewProvider, ReviewItem } from './reviewProvider';
 import { PenterCodeLensProvider } from './penterCodeLensProvider';
 import { PenterDecorationProvider } from './penterDecorationProvider';
 import { ShadowDiffDecorationProvider } from './shadowDiffDecorationProvider';
+// InlineReviewDecorationProvider removed - functionality merged into PenterCodeLensProvider
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Coder Helper is now active!');
@@ -49,6 +50,8 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize generators
     const chatGenerator = new ChatGenerator();
     const changeApplier = new ChangeApplier();
+
+    // Note: Accept/Reject functionality is handled by PenterCodeLensProvider
 
 
     // --- COMMANDS ---
@@ -324,17 +327,88 @@ export function activate(context: vscode.ExtensionContext) {
                 terminal.sendText(`python "${item.shadowPath}"`);
             }
         }),
-        // Apply All And Run
+        // Apply All And Run - Apply all shadow changes and run the main file
         vscode.commands.registerCommand('aiCoder.applyAllAndRun', async () => {
-            vscode.window.showInformationMessage('Apply All & Run: Not implemented');
+            try {
+                // First, merge all shadow files (Local PR)
+                await vscode.commands.executeCommand('aiCoder.localPR');
+
+                // Find main entry point (main.py, index.js, etc.)
+                if (!vscode.workspace.workspaceFolders) return;
+                const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const mainFiles = ['main.py', 'app.py', 'index.js', 'index.ts', 'main.js', 'main.ts'];
+
+                let mainFile = '';
+                for (const f of mainFiles) {
+                    const filePath = path.join(root, f);
+                    if (fs.existsSync(filePath)) {
+                        mainFile = filePath;
+                        break;
+                    }
+                }
+
+                if (mainFile) {
+                    const terminal = vscode.window.createTerminal('Run Project');
+                    terminal.show();
+                    if (mainFile.endsWith('.py')) {
+                        terminal.sendText(`python "${mainFile}"`);
+                    } else {
+                        terminal.sendText(`node "${mainFile}"`);
+                    }
+                } else {
+                    vscode.window.showWarningMessage('No main file found (main.py, app.py, index.js, etc.)');
+                }
+            } catch (e) {
+                vscode.window.showErrorMessage(`Apply All & Run failed: ${e}`);
+            }
         }),
-        // Run Original
+        // Run Original - Run the original project without shadow changes
         vscode.commands.registerCommand('aiCoder.runOriginal', async () => {
-            vscode.window.showInformationMessage('Run Original: Not implemented');
+            try {
+                if (!vscode.workspace.workspaceFolders) return;
+                const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const mainFiles = ['main.py', 'app.py', 'index.js', 'index.ts', 'main.js', 'main.ts'];
+
+                let mainFile = '';
+                for (const f of mainFiles) {
+                    const filePath = path.join(root, f);
+                    if (fs.existsSync(filePath)) {
+                        mainFile = filePath;
+                        break;
+                    }
+                }
+
+                if (mainFile) {
+                    const terminal = vscode.window.createTerminal('Run Original');
+                    terminal.show();
+                    if (mainFile.endsWith('.py')) {
+                        terminal.sendText(`python "${mainFile}"`);
+                    } else {
+                        terminal.sendText(`node "${mainFile}"`);
+                    }
+                } else {
+                    vscode.window.showWarningMessage('No main file found (main.py, app.py, index.js, etc.)');
+                }
+            } catch (e) {
+                vscode.window.showErrorMessage(`Run Original failed: ${e}`);
+            }
         }),
-        // Select/Deselect All
-        vscode.commands.registerCommand('aiCoder.selectAll', () => { vscode.window.showInformationMessage('Select All: Not implemented'); }),
-        vscode.commands.registerCommand('aiCoder.deselectAll', () => { vscode.window.showInformationMessage('Deselect All: Not implemented'); })
+        // Select All - Select all files in the file tree
+        vscode.commands.registerCommand('aiCoder.selectAll', async () => {
+            // Get all items from file tree and select them
+            const items = await fileTreeProvider.getChildren();
+            if (items && items.length > 0) {
+                // Note: VS Code TreeView doesn't support programmatic multi-select easily
+                // Show info about using Ctrl+A or Shift+Click
+                vscode.window.showInformationMessage(
+                    `Found ${items.length} top-level items. Use Ctrl+Click or Shift+Click in the tree to multi-select, then use "New PR" to sync selected files.`
+                );
+            }
+        }),
+        // Deselect All - Clear selection
+        vscode.commands.registerCommand('aiCoder.deselectAll', () => {
+            vscode.window.showInformationMessage('Click on empty space in the tree view to clear selection.');
+        })
     );
 
     // 6. Apply Changes (Fixed: Read from appRoot/file/chat.txt, proper shadow path, confirmation flow)
@@ -414,12 +488,12 @@ export function activate(context: vscode.ExtensionContext) {
             // Apply ALL instructions to shadow immediately (user can reject to undo)
             await reviewProvider.applyAllToShadow();
 
-            // Enable shadow diff highlighting
-            if (!shadowDiffProvider.isEnabled()) {
-                shadowDiffProvider.toggle();
-            }
+            // Enable inline diff mode (not side-by-side) AND CodeLens in diff editor
+            const config = vscode.workspace.getConfiguration('diffEditor');
+            await config.update('renderSideBySide', false, vscode.ConfigurationTarget.Global);
+            await config.update('codeLens', true, vscode.ConfigurationTarget.Global);
 
-            // Get unique affected files and open shadow files (not diff view)
+            // Get unique affected files and open diff views in inline mode
             const affectedFiles = Array.from(new Set(instructions.map(i => i.filePath)));
             for (const filePath of affectedFiles) {
                 // Calculate shadow file path
@@ -427,16 +501,25 @@ export function activate(context: vscode.ExtensionContext) {
                 const shadowFilePath = path.join(shadowBase, relPath);
 
                 if (fs.existsSync(shadowFilePath)) {
-                    // Open shadow file directly (with inline decorations)
+                    // Open diff view: Original vs Shadow (will be inline mode)
+                    const originalUri = vscode.Uri.file(filePath);
                     const shadowUri = vscode.Uri.file(shadowFilePath);
-                    await vscode.window.showTextDocument(shadowUri, { preview: false });
+                    const title = `${path.basename(filePath)} (Original ↔ Shadow)`;
+
+                    await vscode.commands.executeCommand(
+                        'vscode.diff',
+                        originalUri,
+                        shadowUri,
+                        title,
+                        { preview: false }
+                    );
                 }
             }
 
             // Show info about next steps
             vscode.window.showInformationMessage(
-                `✅ Applied ${instructions.length} instructions to Shadow. ` +
-                `Reject unwanted changes in 'Penter Review' panel.`
+                `✅ Applied ${instructions.length} instructions. ` +
+                `Review inline diff. Accept/Reject in 'Penter Review' panel.`
             );
 
             // Refresh shadow tree
@@ -484,18 +567,18 @@ export function activate(context: vscode.ExtensionContext) {
             // Accept: Apply to shadow and remove from list
             await reviewProvider.acceptAndRemove(id);
         }),
-        vscode.commands.registerCommand('aiCoder.rejectInstructionInline', (id: number) => {
-            // Reject: Remove from list without applying
-            reviewProvider.rejectAndRemove(id);
+        vscode.commands.registerCommand('aiCoder.rejectInstructionInline', async (id: number) => {
+            // Reject: Revert changes from shadow and remove from list
+            await reviewProvider.rejectAndRemove(id);
         }),
         vscode.commands.registerCommand('aiCoder.acceptInstruction', async (item: ReviewItem) => {
             if (item.type === 'instruction') {
                 await reviewProvider.acceptAndRemove((item.data as any).id);
             }
         }),
-        vscode.commands.registerCommand('aiCoder.rejectInstruction', (item: ReviewItem) => {
+        vscode.commands.registerCommand('aiCoder.rejectInstruction', async (item: ReviewItem) => {
             if (item.type === 'instruction') {
-                reviewProvider.rejectAndRemove((item.data as any).id);
+                await reviewProvider.rejectAndRemove((item.data as any).id);
             }
         }),
         vscode.commands.registerCommand('aiCoder.acceptAllInstructions', () => reviewProvider.acceptAll()),
@@ -510,9 +593,9 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
-    // Add CodeLens
+    // Add CodeLens - register for all files to work in diff editor
     const codeLensProvider = new PenterCodeLensProvider(reviewProvider);
-    context.subscriptions.push(vscode.languages.registerCodeLensProvider({ pattern: '**/*chat.txt' }, codeLensProvider));
+    context.subscriptions.push(vscode.languages.registerCodeLensProvider({ pattern: '**/*' }, codeLensProvider));
 
     const decorationProvider = new PenterDecorationProvider(reviewProvider);
     if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.fileName.endsWith('chat.txt')) {
